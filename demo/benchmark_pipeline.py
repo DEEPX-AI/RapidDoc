@@ -466,6 +466,7 @@ def run_benchmark(
             lang_list,
             ocr_enabled_list,
             all_pdf_perf_stats,
+            _model_load_times,
         ) = pipeline_doc_analyze(
             fresh_pdf_bytes,
             parse_method="auto",

@@ -122,6 +122,7 @@ def _build_perf_summary_md(
     wall_time: float,
     total_pages: int,
     pipeline_mode: str = "",
+    model_load_times: dict = None,
 ) -> str:
     """Performance Summary를 마크다운 문자열로 생성한다."""
     stage_order = ['layout', 'formula', 'pdf_det', 'ocr_det', 'table', 'ocr_rec']
@@ -135,7 +136,8 @@ def _build_perf_summary_md(
     }
 
     lines: list[str] = []
-    lines.append(f"# Performance Summary")
+    title = f"{pipeline_mode} Performance Summary" if pipeline_mode else "Performance Summary"
+    lines.append(f"# {title}")
     lines.append("")
     lines.append(f"- **Date**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     if pipeline_mode:
@@ -147,11 +149,67 @@ def _build_perf_summary_md(
         lines.append(f"- **Overall Throughput**: {total_pages / wall_time:.1f} pages/s")
     lines.append("")
 
-    # Per-PDF 성능 요약
+    # Model Loading 섹션
+    if model_load_times:
+        total_load = sum(model_load_times.values())
+        lines.append("## Model Loading")
+        lines.append("")
+        lines.append("| Model | Load Time |")
+        lines.append("|:---|---:|")
+        for name, elapsed in model_load_times.items():
+            lines.append(f"| {name} | {elapsed:.2f} s |")
+        lines.append(f"| **Total** | **{total_load:.2f} s** |")
+        lines.append("")
+
+    # 전체 집계 Pipeline Steps (Overall)
+    agg: dict[str, dict] = {}
+    for pdf_stats in all_pdf_perf_stats.values():
+        for key, s in pdf_stats.items():
+            if key not in agg:
+                agg[key] = {'time': 0.0, 'count': 0}
+            agg[key]['time'] += s['time']
+            agg[key]['count'] += s['count']
+
+    total_stage_time = sum(s['time'] for s in agg.values())
+
+    lines.append("## Overall Pipeline Performance")
+    lines.append("")
+    lines.append("| Pipeline Step | Avg Latency | Throughput |")
+    lines.append("|:---|---:|---:|")
+    for key in stage_order:
+        if key not in agg or agg[key]['time'] <= 0:
+            continue
+        s = agg[key]
+        t, c = s['time'], s['count']
+        avg_ms = (t / max(c, 1)) * 1000
+        fps = c / max(t, 0.001)
+        label = stage_labels.get(key, key)
+        lines.append(f"| {label} | {avg_ms:.2f} ms | {fps:.1f} FPS |")
+    lines.append("")
+    lines.append(f"- **Total Stages**: {total_stage_time:.2f} s")
+    lines.append("")
+
+    # Per-Document Elapsed Time 테이블
+    if len(all_pdf_perf_stats) > 1:
+        lines.append("## Per-Document Elapsed Time")
+        lines.append("")
+        lines.append("| Document | Total Time (s) | Pages |")
+        lines.append("|:---|---:|---:|")
+        for pdf_idx in sorted(all_pdf_perf_stats.keys()):
+            pdf_stats = all_pdf_perf_stats[pdf_idx]
+            doc_total = sum(s['time'] for s in pdf_stats.values())
+            page_count = max(
+                (s['count'] for s in pdf_stats.values()), default=0
+            )
+            pdf_name = pdf_file_names[pdf_idx] if pdf_idx < len(pdf_file_names) else f"PDF #{pdf_idx}"
+            lines.append(f"| {pdf_name} | {doc_total:.2f} | {page_count} |")
+        lines.append("")
+
+    # Per-PDF 상세 성능
     for pdf_idx in sorted(all_pdf_perf_stats.keys()):
         pdf_stats = all_pdf_perf_stats[pdf_idx]
         pdf_name = pdf_file_names[pdf_idx] if pdf_idx < len(pdf_file_names) else f"PDF #{pdf_idx}"
-        total_stage_time = sum(s['time'] for s in pdf_stats.values())
+        total_pdf_stage_time = sum(s['time'] for s in pdf_stats.values())
 
         lines.append(f"## {pdf_name}")
         lines.append("")
@@ -169,42 +227,11 @@ def _build_perf_summary_md(
             lines.append(f"| {label} | {avg_ms:.2f} ms | {fps:.1f} FPS |")
 
         lines.append("")
-        lines.append(f"- **Total Stage Time**: {total_stage_time:.2f} s")
-        page_count = sum(1 for s in pdf_stats.values() if s.get('count', 0) > 0)
+        lines.append(f"- **Total Stage Time**: {total_pdf_stage_time:.2f} s")
         layout_count = pdf_stats.get('layout', {}).get('count', 0)
         if layout_count > 0:
             lines.append(f"- **Pages**: {layout_count}")
-            lines.append(f"- **Avg per Page**: {total_stage_time / layout_count:.2f} s")
-        lines.append("")
-
-    # 전체 집계 (PDF가 2개 이상인 경우)
-    if len(all_pdf_perf_stats) > 1:
-        agg: dict[str, dict] = {}
-        for pdf_stats in all_pdf_perf_stats.values():
-            for key, s in pdf_stats.items():
-                if key not in agg:
-                    agg[key] = {'time': 0.0, 'count': 0}
-                agg[key]['time'] += s['time']
-                agg[key]['count'] += s['count']
-
-        total_stage_time = sum(s['time'] for s in agg.values())
-        lines.append("## Overall (All PDFs)")
-        lines.append("")
-        lines.append("| Pipeline Step | Avg Latency | Throughput |")
-        lines.append("|:---|---:|---:|")
-
-        for key in stage_order:
-            if key not in agg or agg[key]['time'] <= 0:
-                continue
-            s = agg[key]
-            t, c = s['time'], s['count']
-            avg_ms = (t / max(c, 1)) * 1000
-            fps = c / max(t, 0.001)
-            label = stage_labels.get(key, key)
-            lines.append(f"| {label} | {avg_ms:.2f} ms | {fps:.1f} FPS |")
-
-        lines.append("")
-        lines.append(f"- **Total Stage Time**: {total_stage_time:.2f} s")
+            lines.append(f"- **Avg per Page**: {total_pdf_stage_time / layout_count:.2f} s")
         lines.append("")
 
     return "\n".join(lines)
@@ -389,7 +416,7 @@ def do_parse(
     logger.info("Model inference started")
     start_time = time.time()
     
-    infer_results, all_image_lists, all_page_dicts, lang_list, ocr_enabled_list, all_pdf_perf_stats = pipeline_doc_analyze(
+    infer_results, all_image_lists, all_page_dicts, lang_list, ocr_enabled_list, all_pdf_perf_stats, model_load_times = pipeline_doc_analyze(
         pdf_bytes_list, 
         parse_method=parse_method, 
         formula_enable=formula_enable,
@@ -414,6 +441,7 @@ def do_parse(
         pipeline_label = mode_labels.get(use_async_pipeline, str(use_async_pipeline))
         perf_md = _build_perf_summary_md(
             all_pdf_perf_stats, pdf_file_names, wall_time, total_pages, pipeline_label,
+            model_load_times=model_load_times,
         )
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         perf_md_path = os.path.join(output_dir, f"performance_summary_{timestamp}.md")

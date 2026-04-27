@@ -181,12 +181,13 @@ def doc_analyze(
     # 배치 처리 실행 (Sync or Async mode)
     results = []
     all_pdf_perf_stats = {}  # PDF별 성능 통계 (배치 간 병합)
+    model_load_times = {}
     processed_images_count = 0
     
     if use_async_pipeline == "finegrained":
         logger.info(f"🚀 Using FinegrainedStreamingPipeline for {len(images_with_extra_info)} pages")
         from .async_pipeline import finegrained_streaming_batch_image_analyze
-        results, all_pdf_perf_stats = finegrained_streaming_batch_image_analyze(
+        results, all_pdf_perf_stats, model_load_times = finegrained_streaming_batch_image_analyze(
             images_with_extra_info,
             formula_enable=formula_enable,
             table_enable=table_enable,
@@ -204,7 +205,7 @@ def doc_analyze(
         
         from .async_pipeline import async_batch_image_analyze
         
-        results, all_pdf_perf_stats = async_batch_image_analyze(
+        results, all_pdf_perf_stats, model_load_times = async_batch_image_analyze(
             images_with_extra_info,
             formula_enable=formula_enable,
             table_enable=table_enable,
@@ -303,7 +304,7 @@ def doc_analyze(
                 logger.info(f" {'Avg per Page':<16} {total_time / page_count:>10.2f} s")
             logger.info("=" * W)
 
-    return infer_results, all_image_lists, all_pdf_docs, lang_list, ocr_enabled_list, all_pdf_perf_stats
+    return infer_results, all_image_lists, all_pdf_docs, lang_list, ocr_enabled_list, all_pdf_perf_stats, model_load_times
 
 
 def batch_image_analyze(

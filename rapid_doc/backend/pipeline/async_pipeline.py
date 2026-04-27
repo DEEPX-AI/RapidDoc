@@ -1338,8 +1338,9 @@ def async_batch_image_analyze(
     )
 
     results, pdf_perf_stats = pipeline.run(images_with_extra_info)
+    model_load_times = getattr(model, 'model_load_times', {})
     clean_memory(get_device())
-    return results, pdf_perf_stats
+    return results, pdf_perf_stats, model_load_times
 
 
 def finegrained_streaming_batch_image_analyze(
@@ -1393,9 +1394,10 @@ def finegrained_streaming_batch_image_analyze(
     )
 
     results, pdf_perf_stats = pipeline.run(images_with_extra_info)
+    model_load_times = getattr(model, 'model_load_times', {})
     clean_memory(get_device())
 
-    return results, pdf_perf_stats
+    return results, pdf_perf_stats, model_load_times
 
 
 # backward-compatible alias (pipeline_analyze.py의 기존 호출부가 input_interval을 넘기는 경우 대비)

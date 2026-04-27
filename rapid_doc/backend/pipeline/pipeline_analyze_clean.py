@@ -186,7 +186,7 @@ def doc_analyze(
         
         from .async_pipeline import async_batch_image_analyze
         
-        results, all_pdf_perf_stats = async_batch_image_analyze(
+        results, all_pdf_perf_stats, _model_load_times = async_batch_image_analyze(
             images_with_extra_info,
             formula_enable=formula_enable,
             table_enable=table_enable,
