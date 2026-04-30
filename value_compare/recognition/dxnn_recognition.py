@@ -22,7 +22,8 @@ import cv2
 import numpy as np
 from loguru import logger
 from rapidocr.ch_ppocr_rec.utils import CTCLabelDecode
-from dx_engine import InferenceEngine
+from dx_engine import InferenceEngine, InferenceOption
+from rapid_doc.utils.device_utils import get_dxnn_devices
 
 
 class DXNNRecognitionInference:
@@ -62,7 +63,11 @@ class DXNNRecognitionInference:
         """ONNX Runtime 세션 초기화"""
         logger.info(f"ONNX 모델 로딩: {self.model_path}")
         
-        self.session = InferenceEngine(str(self.model_path))
+        self.io = InferenceOption()
+        self.io.devices = get_dxnn_devices()
+        self.io.bound_option = InferenceOption.BOUND_OPTION.NPU_ALL
+        
+        self.session = InferenceEngine(str(self.model_path), self.io)
     
     def _load_character_dict(self, dict_path: Optional[str] = None) -> List[str]:
         """

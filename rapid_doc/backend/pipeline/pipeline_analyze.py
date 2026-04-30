@@ -57,10 +57,22 @@ def custom_model_init(
     ocr_config=None,
     formula_config=None,
     table_config=None,
+    hybrid=False,
 ):
     model_init_start = time.time()
     # 설정 파일에서 model-dir과 device 읽기
     device = get_device()
+
+    # Hybrid device partitioning setup
+    if hybrid:
+        try:
+            from rapid_doc.utils.device_allocator import DeviceAllocator
+            from rapid_doc.backend.pipeline.model_init import AtomModelSingleton
+            allocator = DeviceAllocator(hybrid=True)
+            AtomModelSingleton.set_allocator(allocator)
+            logger.info(f"🔀 Hybrid mode enabled: {allocator}")
+        except Exception as e:
+            logger.warning(f"⚠️ Hybrid mode failed, continuing without: {e}")
 
     final_formula_config = {"enable": formula_enable}
     if formula_config is not None:
@@ -103,6 +115,7 @@ def doc_analyze(
         use_async_pipeline: bool = False,
         async_input_interval: float = 0.0,
         async_verbose: bool = False,
+        hybrid: bool = False,
 ):
     """
     MIN_BATCH_INFERENCE_SIZE를 적절히 늘리면 성능이 향상되며, 더 큰 MIN_BATCH_INFERENCE_SIZE는 더 많은 메모리를 소비합니다.
@@ -157,14 +170,31 @@ def doc_analyze(
             pdf_doc.close()
             all_pdf_dict.append(page_dict)
         all_pdf_docs.append(all_pdf_dict)
-        pdf_force_ocr = _ocr_enable or any(page_force_ocr_flags)
+        # parse_method별 OCR 판단:
+        #   txt  → OCR 완전 비활성화
+        #   ocr  → 모든 페이지 OCR 강제
+        #   auto → classify()가 'ocr'이면 전체 OCR, 아니면 페이지별 판단
+        if parse_method == 'txt':
+            pdf_force_ocr = False
+        elif parse_method == 'ocr' or _ocr_enable:
+            pdf_force_ocr = True
+        else:
+            # auto 모드 + 디지털 PDF: 페이지별로 판단 (PDF 단위 플래그는 False)
+            pdf_force_ocr = False
         ocr_enabled_list.append(pdf_force_ocr)
 
         for page_idx, img_dict in enumerate(images_list):
             needs_page_ocr = page_force_ocr_flags[page_idx] if page_idx < len(page_force_ocr_flags) else False
+            if parse_method == 'txt':
+                page_ocr_enable = False
+            elif pdf_force_ocr:
+                page_ocr_enable = True
+            else:
+                # auto 모드: 텍스트 없는 페이지만 OCR
+                page_ocr_enable = needs_page_ocr
             all_pages_info.append((
                 pdf_idx, page_idx,
-                img_dict['img_pil'], img_dict['scale'], pdf_force_ocr or needs_page_ocr, _lang,
+                img_dict['img_pil'], img_dict['scale'], page_ocr_enable, _lang,
             ))
 
     # 배치 처리 준비 (PDF 인덱스 추가)
@@ -198,6 +228,7 @@ def doc_analyze(
             checkbox_config=checkbox_config,
             input_interval=async_input_interval,
             verbose=async_verbose,
+            hybrid=hybrid,
         )
     elif use_async_pipeline:
         # Async mode: Process all pages at once using AsyncPipelineRapidDoc
@@ -215,7 +246,8 @@ def doc_analyze(
             table_config=table_config,
             checkbox_config=checkbox_config,
             input_interval=async_input_interval,
-            verbose=async_verbose
+            verbose=async_verbose,
+            hybrid=hybrid,
         )
         
     else:
@@ -249,11 +281,11 @@ def doc_analyze(
         infer_results.append([])
 
     for i, page_info in enumerate(all_pages_info):
-        pdf_idx, page_idx, pil_img, _, _, _ = page_info
+        pdf_idx, page_idx, pil_img, _, page_ocr_enable, _ = page_info
         result = results[i]
 
         page_info_dict = {'page_no': page_idx, 'width': pil_img.width, 'height': pil_img.height}
-        page_dict = {'layout_dets': result, 'page_info': page_info_dict}
+        page_dict = {'layout_dets': result, 'page_info': page_info_dict, 'page_ocr_enable': page_ocr_enable}
 
         infer_results[pdf_idx].append(page_dict)
 

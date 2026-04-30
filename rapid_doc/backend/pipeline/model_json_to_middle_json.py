@@ -182,8 +182,10 @@ def result_to_middle_json(model_list, images_list, page_dict_list, image_writer,
     for page_index, page_model_info in tqdm(enumerate(model_list), total=len(model_list), desc="Processing pages"):
         page_dict = page_dict_list[page_index]
         image_dict = images_list[page_index]
+        # 페이지별 OCR 판단: page_model_info에 페이지별 플래그가 있으면 우선 사용
+        page_ocr_enable = page_model_info.get('page_ocr_enable', ocr_enable) if isinstance(page_model_info, dict) else ocr_enable
         page_info = page_model_info_to_page_info(
-            page_model_info, image_dict, page_dict, image_writer, page_index, ocr_enable=ocr_enable, formula_enabled=formula_enabled, image_config=image_config
+            page_model_info, image_dict, page_dict, image_writer, page_index, ocr_enable=page_ocr_enable, formula_enabled=formula_enabled, image_config=image_config
         )
         if page_info is None:
             page_w, page_h = map(int, page_dict['size'])

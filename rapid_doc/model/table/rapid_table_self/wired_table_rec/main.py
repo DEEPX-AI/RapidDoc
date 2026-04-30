@@ -45,6 +45,8 @@ class WiredTableInput:
     use_cuda: bool = False
     device: str = "cpu"
     use_async: bool = False  # Async 모드 사용 여부
+    device_ids: Optional[list] = None
+    device_lock: Any = None
 
 
 @dataclass
@@ -65,7 +67,10 @@ class WiredTableRecognition:
             )
 
         config.model_path = self.get_model_path(config.model_type, config.model_path)
-        self.table_structure = TSRUnet(asdict(config))
+        config_dict = asdict(config)
+        # asdict deep copies → 공유 lock 참조 복원
+        config_dict['device_lock'] = config.device_lock
+        self.table_structure = TSRUnet(config_dict)
 
         self.load_img = LoadImage()
 
@@ -128,6 +133,58 @@ class WiredTableRecognition:
             logi_points = np.array(logi_points)
             elapse = time.perf_counter() - s
 
+        except Exception:
+            logging.warning(traceback.format_exc())
+            return WiredTableOutput("", None, None, 0.0)
+        return WiredTableOutput(pred_html, polygons, logi_points, elapse)
+
+    def run_structure_only(self, img: InputType):
+        """UNET 구조 검출만 실행. __call__의 전반부.
+        
+        NOTE: table_structure(TSRUnet.__call__)가 이미 reshape+swap+sort를 
+        수행하므로 여기서 추가 변환하지 않는다.
+        """
+        img = self.load_img(img)
+        polygons, rotated_polygons = self.table_structure(img)
+        if polygons is None:
+            return None, None
+        return polygons, rotated_polygons
+
+    def build_from_structure(
+        self,
+        img: InputType,
+        polygons: np.ndarray,
+        rotated_polygons: np.ndarray,
+        ocr_result,
+        **kwargs,
+    ) -> WiredTableOutput:
+        """UNET 구조 + OCR 결과로 HTML 생성. __call__의 후반부."""
+        s = time.perf_counter()
+        col_threshold = kwargs.get("col_threshold", 15)
+        row_threshold = kwargs.get("row_threshold", 10)
+        img = self.load_img(img)
+
+        try:
+            table_res, logi_points = self.table_recover(
+                rotated_polygons, row_threshold, col_threshold
+            )
+            polygons[:, 1, :], polygons[:, 3, :] = (
+                polygons[:, 3, :].copy(),
+                polygons[:, 1, :].copy(),
+            )
+            cell_box_det_map, not_match_orc_boxes = match_ocr_cell(ocr_result, polygons)
+            cell_box_det_map = self.fill_blank_rec(img, polygons, cell_box_det_map)
+            t_rec_ocr_list = self.transform_res(cell_box_det_map, polygons, logi_points)
+            t_rec_ocr_list = self.sort_and_gather_ocr_res(t_rec_ocr_list)
+            logi_points = [t_box_ocr["t_logic_box"] for t_box_ocr in t_rec_ocr_list]
+            cell_box_det_map = {
+                i: [ocr_box_and_text[1] for ocr_box_and_text in t_box_ocr["t_ocr_res"]]
+                for i, t_box_ocr in enumerate(t_rec_ocr_list)
+            }
+            pred_html = plot_html_table(logi_points, cell_box_det_map)
+            polygons = np.array(polygons).reshape(-1, 8)
+            logi_points = np.array(logi_points)
+            elapse = time.perf_counter() - s
         except Exception:
             logging.warning(traceback.format_exc())
             return WiredTableOutput("", None, None, 0.0)

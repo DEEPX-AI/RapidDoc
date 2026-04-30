@@ -139,26 +139,74 @@ def txt_spans_bbox_extract(page_dict, input_res, mfd_res, scale, useful_list):
                 text = span['text']  # 获取文字内容
                 if calculate_text_in_span(bbox, input_res_bbox, text):
                     page_text_span.append(span)
-    # 合并相邻或重叠的文字框
-    page_text_span = merge_adjacent_bboxes(page_text_span)
-    page_text_bbox = [item['bbox'] for item in page_text_span if 'bbox' in item]
+    # 合并相邻或重叠的文字框 (텍스트 내용도 함께 병합)
+    page_text_span = merge_adjacent_bboxes(page_text_span, return_text=True)
+
+    # 박스와 텍스트를 함께 추적
     dt_boxes = []
-    # 转换为和ocr-det一样的格式
-    for bbox in page_text_bbox:
+    dt_texts = []
+    for item in page_text_span:
+        if 'bbox' not in item:
+            continue
+        bbox = item['bbox']
+        text = item.get('text', '')
         bbox = [bbox[0]*scale, bbox[1]*scale, bbox[2]*scale, bbox[3]*scale]
         p1 = [bbox[0] + paste_x - xmin, bbox[1] + paste_y - ymin]
         p2 = [bbox[2] + paste_x - xmin, bbox[1] + paste_y - ymin]
         p3 = [bbox[2] + paste_x - xmin, bbox[3] + paste_y - ymin]
         p4 = [bbox[0] + paste_x - xmin, bbox[3] + paste_y - ymin]
-        bbox = [p1, p2, p3, p4]
-        dt_boxes.append(bbox)
-    # 根据公式位置更新检测框
+        dt_boxes.append([p1, p2, p3, p4])
+        dt_texts.append(text)
+
+    # 공식 위치에 따라 검출 박스 업데이트
     if mfd_res:
+        # 원본 박스-텍스트 매핑 저장 (formula masking 후 재매칭용)
+        original_boxes_with_text = list(zip(dt_boxes, dt_texts))
         dt_boxes = update_det_boxes(dt_boxes, mfd_res)
+        # 분할된 박스에 대해 원본 텍스트 재매칭
+        dt_texts = _rematch_texts_after_split(dt_boxes, original_boxes_with_text)
+
     if not dt_boxes:
-        # pdf里提取不到，用ocr-det提取
+        # pdf에서 추출 불가 → ocr-det 사용
         input_res['need_ocr_det'] = True
-    return dt_boxes
+    # (box, (text, score)) 형식으로 반환 — get_ocr_result_list와 호환
+    return [([p1, p2, p3, p4], (text, 1.0)) for (p1, p2, p3, p4), text in zip(dt_boxes, dt_texts)]
+
+
+def _rematch_texts_after_split(new_boxes, original_boxes_with_text):
+    """formula masking으로 분할된 박스에 대해 원본 텍스트를 재매칭한다."""
+    new_texts = []
+    for new_box in new_boxes:
+        new_x0 = new_box[0][0]
+        new_x1 = new_box[1][0]
+        new_y_center = (new_box[0][1] + new_box[2][1]) / 2
+        best_text = ''
+        best_overlap = 0
+        for orig_box, orig_text in original_boxes_with_text:
+            orig_x0 = orig_box[0][0]
+            orig_x1 = orig_box[1][0]
+            orig_y0 = orig_box[0][1]
+            orig_y1 = orig_box[2][1]
+            # Y축 범위 내에 있는지 확인
+            if not (orig_y0 <= new_y_center <= orig_y1):
+                continue
+            # X축 겹침 계산
+            overlap = min(new_x1, orig_x1) - max(new_x0, orig_x0)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                # 분할된 경우 비율에 따라 텍스트 추출
+                orig_width = orig_x1 - orig_x0
+                if orig_width > 0 and overlap < orig_width * 0.95:
+                    # 원본 박스가 분할됨 — 비율로 텍스트 슬라이싱
+                    ratio_start = max(0, (new_x0 - orig_x0) / orig_width)
+                    ratio_end = min(1, (new_x1 - orig_x0) / orig_width)
+                    char_start = int(ratio_start * len(orig_text))
+                    char_end = int(ratio_end * len(orig_text))
+                    best_text = orig_text[char_start:char_end].strip()
+                else:
+                    best_text = orig_text
+        new_texts.append(best_text)
+    return new_texts
 
 """pdf_text bbox提取（表格里的文字）"""
 def txt_spans_bbox_extract_table(page_dict, table_res_dict, scale):

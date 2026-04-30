@@ -28,10 +28,12 @@ from rapid_doc.utils.ocr_utils import (
 )
 
 try:
-    from dx_engine import InferenceEngine
+    from dx_engine import InferenceEngine, InferenceOption
 except ImportError:
     logger.warning("dx_engine not installed. DxOcrModel will not work.")
     InferenceEngine = None
+
+from rapid_doc.utils.device_utils import get_dxnn_devices
 
 
 class DxOcrEngineType(Enum):
@@ -56,6 +58,8 @@ class DxTextDetector:
         use_multi_det_model: bool = False,  # Multi-model detection 사용 여부
         model_paths: dict = None,  # Ratio별 모델 경로
         use_async: bool = False,  # Async 모드 사용 여부
+        device_ids: list = None,
+        device_lock=None,
         **kwargs
     ):
         """
@@ -95,13 +99,17 @@ class DxTextDetector:
         # request_id -> {'ori_shape': (h, w), 'target_size': (h, w), 'start_time': float}
         self.pending_requests = {}
         self.lock = threading.Lock()
-        self._infer_lock = threading.Lock()  # Prevent concurrent access to DX Engine session
+        self._infer_lock = device_lock if device_lock is not None else threading.Lock()
         self._request_counter = 0  # thread-safe 카운터
         self._callback_session_ids = set()
         
         # DX Engine 초기화
         if InferenceEngine is None:
             raise ImportError("dx_engine is not installed. Please install it first.")
+        
+        self.io = InferenceOption()
+        self.io.devices = device_ids if device_ids is not None else get_dxnn_devices()
+        self.io.bound_option = InferenceOption.BOUND_OPTION.NPU_ALL
         
         if self.use_multi_det_model and model_paths:
             # Multi-model: ratio별 세션 초기화
@@ -115,7 +123,7 @@ class DxTextDetector:
 
             for ratio, path in model_paths.items():
                 if Path(path).exists():
-                    session = InferenceEngine(str(path))
+                    session = InferenceEngine(str(path), self.io)
                     self.det_session_map[ratio] = {
                         'session': session,
                         'path': path,
@@ -128,13 +136,13 @@ class DxTextDetector:
             if not self.det_session_map:
                 logger.warning("No multi-model detection models loaded, falling back to single model")
                 self.use_multi_det_model = False
-                self.session = InferenceEngine(str(self.model_path))
+                self.session = InferenceEngine(str(self.model_path), self.io)
                 self.input_size = input_size
             else:
                 logger.info(f"Multi-detection initialized with {len(self.det_session_map)} models")
         else:
             # Single model
-            self.session = InferenceEngine(str(self.model_path))
+            self.session = InferenceEngine(str(self.model_path), self.io)
             self.input_size = input_size
             logger.info(f"DX Engine static shape mode: input size fixed to {input_size}x{input_size}")
         
@@ -453,25 +461,44 @@ class DxTextDetector:
     def _preprocess(self, img: np.ndarray) -> Optional[Tuple[np.ndarray, Tuple[int, int]]]:
         """
         이미지 전처리 (DX Engine용 고정 크기 640x640)
+        C++ 구현과 동일: pad-to-square(gray 114) → resize to target
         
         Args:
             img: 입력 이미지 (H, W, C)
             
         Returns:
-            전처리된 이미지 (1, C, 640, 640), 원본 크기 (H, W)
+            전처리된 이미지 (1, H, W, C), 원본 크기 (H, W)
         """
         try:
-            # 원본 크기 저장 (후처리에서 사용)
             ori_h, ori_w = img.shape[:2]
+            target_size = self.input_size  # 640
             
-            # 1. 고정 크기로 리사이즈 (640x640)
-            # DX Engine은 static shape만 지원하므로 무조건 고정 크기로 변환
-            img_resized = cv2.resize(img, (self.input_size, self.input_size))
+            # Step 1: Pad to square with gray(114) — 비율 보존
+            PAD_COLOR = (114, 114, 114)
+            if ori_w < ori_h:
+                # 세로가 더 김 → 오른쪽에 패딩
+                pad_w = ori_h - ori_w
+                padded = cv2.copyMakeBorder(img, 0, 0, 0, pad_w,
+                                           cv2.BORDER_CONSTANT, value=PAD_COLOR)
+            elif ori_w > ori_h:
+                # 가로가 더 김 → 아래에 패딩
+                pad_h = ori_w - ori_h
+                padded = cv2.copyMakeBorder(img, 0, pad_h, 0, 0,
+                                           cv2.BORDER_CONSTANT, value=PAD_COLOR)
+            else:
+                padded = img
             
-            # 4. 배치 차원 추가 (C, H, W) -> (1, C, H, W)
+            # padded_size = 패딩 후 정방형 크기 (좌표 매핑에 사용)
+            padded_h, padded_w = padded.shape[:2]
+            
+            # Step 2: 정방형 이미지를 target_size × target_size로 resize
+            img_resized = cv2.resize(padded, (target_size, target_size))
+            
+            # 배치 차원 추가
             img_batch = np.expand_dims(img_resized, axis=0)
             
-            return img_batch, (ori_h, ori_w)
+            # ori_shape에 padded_size 정보도 포함 (후처리에서 좌표 매핑용)
+            return img_batch, (ori_h, ori_w, padded_h, padded_w)
             
         except Exception as e:
             logger.error(f"전처리 오류: {e}")
@@ -480,38 +507,63 @@ class DxTextDetector:
     def _preprocess_multi(self, img: np.ndarray, target_size: Tuple[int, int]) -> Optional[Tuple[np.ndarray, Tuple[int, int]]]:
         """
         이미지 전처리 (Multi-model detection용, ratio별 가변 크기)
+        C++ 구현과 동일: pad-to-square(gray 114) → resize to target
         
         Args:
             img: 입력 이미지 (H, W, C)
             target_size: 타겟 크기 (H, W) - e.g., (160, 640), (320, 640), (640, 640)
             
         Returns:
-            전처리된 이미지 (1, C, target_h, target_w), 원본 크기 (H, W)
+            전처리된 이미지 (1, target_h, target_w, C), 원본 크기 정보
         """
         try:
-            # 원본 크기 저장 (후처리에서 사용)
             ori_h, ori_w = img.shape[:2]
             target_h, target_w = target_size
             
-            # 1. 타겟 크기로 리사이즈
-            img_resized = cv2.resize(img, (target_w, target_h))
+            # Step 1: Pad to target aspect ratio with gray(114)
+            # target이 정방형(640×640)이면 C++과 동일하게 pad-to-square
+            # target이 비정방형이면 해당 ratio에 맞게 패딩
+            PAD_COLOR = (114, 114, 114)
+            target_ratio = target_w / target_h  # e.g., 640/640=1.0, 640/320=2.0
+            orig_ratio = ori_w / ori_h
             
-            # 2. 배치 차원 추가 (H, W, C) -> (1, H, W, C)
+            if orig_ratio < target_ratio:
+                # 이미지가 target보다 세로로 김 → 오른쪽에 패딩
+                new_width = int(ori_h * target_ratio)
+                pad_w = new_width - ori_w
+                padded = cv2.copyMakeBorder(img, 0, 0, 0, pad_w,
+                                           cv2.BORDER_CONSTANT, value=PAD_COLOR)
+            elif orig_ratio > target_ratio:
+                # 이미지가 target보다 가로로 김 → 아래에 패딩
+                new_height = int(ori_w / target_ratio)
+                pad_h = new_height - ori_h
+                padded = cv2.copyMakeBorder(img, 0, pad_h, 0, 0,
+                                           cv2.BORDER_CONSTANT, value=PAD_COLOR)
+            else:
+                padded = img
+            
+            padded_h, padded_w = padded.shape[:2]
+            
+            # Step 2: 타겟 크기로 resize
+            img_resized = cv2.resize(padded, (target_w, target_h))
+            
+            # 배치 차원 추가
             img_batch = np.expand_dims(img_resized, axis=0)
             
-            return img_batch, (ori_h, ori_w)
+            return img_batch, (ori_h, ori_w, padded_h, padded_w)
             
         except Exception as e:
             logger.error(f"Multi-model 전처리 오류: {e}")
             return None, None
     
-    def _postprocess(self, preds, ori_shape: Tuple[int, int], model_input_size: Tuple[int, int] = None) -> Optional[np.ndarray]:
+    def _postprocess(self, preds, ori_shape, model_input_size: Tuple[int, int] = None) -> Optional[np.ndarray]:
         """
         후처리: 예측 결과에서 텍스트 박스 추출 및 원본 크기로 스케일 변환
+        C++ 구현과 동일: model_output → padded_space → clip to original
         
         Args:
             preds: 모델 예측 결과 (probability map, shape: [1, 1, H, W])
-            ori_shape: 원본 이미지 shape (H, W)
+            ori_shape: (ori_h, ori_w) 또는 (ori_h, ori_w, padded_h, padded_w)
             model_input_size: 모델 입력 크기 (H, W), None이면 self.input_size 사용
             
         Returns:
@@ -529,10 +581,17 @@ class DxTextDetector:
                 if hasattr(self, 'input_size'):
                     model_h = model_w = self.input_size
                 else:
-                    # Fallback: preds shape에서 추론
                     model_h, model_w = preds.shape[2], preds.shape[3]
             else:
                 model_h, model_w = model_input_size
+            
+            # ori_shape에서 정보 추출
+            if len(ori_shape) == 4:
+                ori_h, ori_w, padded_h, padded_w = ori_shape
+            else:
+                ori_h, ori_w = ori_shape[:2]
+                # 패딩 정보 없으면 기존 방식 (하위 호환)
+                padded_h, padded_w = ori_h, ori_w
             
             # 1. Probability map에서 이진화
             pred = preds[0, 0, :, :]  # (H, W)
@@ -553,10 +612,10 @@ class DxTextDetector:
             boxes = []
             scores = []
             
-            # 스케일 비율 계산 (model_size -> 원본 크기)
-            ori_h, ori_w = ori_shape
-            scale_h = ori_h / model_h
-            scale_w = ori_w / model_w
+            # C++ 방식 좌표 매핑: model_output → padded_space → clip to original
+            # scale = padded_size / model_output_size
+            scale_h = padded_h / model_h
+            scale_w = padded_w / model_w
             
             for contour in contours:
                 # 최소 영역 계산
@@ -591,7 +650,7 @@ class DxTextDetector:
                     bottom_points = sorted(points_sorted[2:], key=lambda p: p[0])  # 하단: x 기준 정렬
                     points = np.array([top_points[0], top_points[1], bottom_points[1], bottom_points[0]])
                     
-                    # 모델 입력 크기 좌표계를 원본 이미지 크기로 변환
+                    # model_output → padded_space → clip to original bounds
                     points[:, 0] = np.clip(points[:, 0] * scale_w, 0, ori_w)
                     points[:, 1] = np.clip(points[:, 1] * scale_h, 0, ori_h)
                     
@@ -677,6 +736,8 @@ class DxTextRecognizer:
         input_width: int = 640,   # DX Engine용 고정 너비
         char_dict_path: str = "None",
         use_async: bool = False,  # Async 모드 사용 여부
+        device_ids: list = None,
+        device_lock=None,
         **kwargs
     ):
         """
@@ -709,13 +770,17 @@ class DxTextRecognizer:
         if InferenceEngine is None:
             raise ImportError("dx_engine is not installed. Please install it first.")
         
-        self.session = InferenceEngine(str(self.model_path))
+        self.io = InferenceOption()
+        self.io.devices = device_ids if device_ids is not None else get_dxnn_devices()
+        self.io.bound_option = InferenceOption.BOUND_OPTION.NPU_ALL
+        
+        self.session = InferenceEngine(str(self.model_path), self.io)
         
         # Async callback 지원을 위한 추가 속성
         # request_id -> True (콜백 미사용 요청 추적)
         self.pending_requests = {}
         self.rec_lock = threading.Lock()
-        self._infer_lock = threading.Lock()  # Prevent concurrent access to DX Engine session
+        self._infer_lock = device_lock if device_lock is not None else threading.Lock()
         self._request_counter = 0  # thread-safe 카운터
         self._callback_registered = False
         
@@ -1015,8 +1080,8 @@ class DxTextRecognizer:
         
         resized_image = cv2.resize(img, (resized_w, imgH))
         
-        # 패딩 (흰색 배경)
-        padding_im = np.ones((imgH, imgW, imgC), dtype=np.uint8) * 255
+        # 패딩 (회색 114 — C++ 구현과 동일, 모델 학습 데이터와 일치)
+        padding_im = np.ones((imgH, imgW, imgC), dtype=np.uint8) * 114
         padding_im[:, :resized_w, :] = resized_image
         
         return padding_im
@@ -1079,6 +1144,10 @@ class DxOcrModel:
         lang: Optional[str] = None,
         ocr_config: Optional[dict] = None,
         use_async: bool = False,
+        det_device_ids: list = None,
+        det_device_lock=None,
+        rec_device_ids: list = None,
+        rec_device_lock=None,
     ):
         """
         Args:
@@ -1159,6 +1228,8 @@ class DxOcrModel:
             use_multi_det_model=use_multi_det_model,
             model_paths=det_model_paths,
             use_async=self.use_async,
+            device_ids=det_device_ids,
+            device_lock=det_device_lock,
         )
         
         self.text_recognizer = DxTextRecognizer(
@@ -1167,6 +1238,8 @@ class DxOcrModel:
             device=default_config["device"],
             char_dict_path=default_config.get("char_dict_path", "None"),
             use_async=self.use_async,
+            device_ids=rec_device_ids,
+            device_lock=rec_device_lock,
         )
         
         self.rec_batch_num = self.text_recognizer.rec_batch_num

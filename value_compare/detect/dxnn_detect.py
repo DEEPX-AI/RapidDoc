@@ -24,7 +24,8 @@ import matplotlib.pyplot as plt
 from loguru import logger
 import pyclipper
 from shapely.geometry import Polygon
-from dx_engine import InferenceEngine
+from dx_engine import InferenceEngine, InferenceOption
+from rapid_doc.utils.device_utils import get_dxnn_devices
 
 
 class DXNNDetectionVisualizer:
@@ -52,8 +53,12 @@ class DXNNDetectionVisualizer:
         # 정규화 파라미터 (ImageNet)
         self.mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
         self.std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-
-        self.engine = InferenceEngine(str(self.model_path))
+        
+        self.io = InferenceOption()
+        self.io.devices = get_dxnn_devices()
+        self.io.bound_option = InferenceOption.BOUND_OPTION.NPU_ALL
+        
+        self.engine = InferenceEngine(str(self.model_path), self.io)
         
     def preprocess(self, img: np.ndarray) -> Tuple[np.ndarray, Tuple[int, int]]:
         """

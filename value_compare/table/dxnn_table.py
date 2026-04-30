@@ -7,7 +7,8 @@ import copy
 import math
 import sys
 from pathlib import Path
-from dx_engine import InferenceEngine
+from dx_engine import InferenceEngine, InferenceOption
+from rapid_doc.utils.device_utils import get_dxnn_devices
 from skimage import measure
 
 # 프로젝트 루트를 sys.path에 추가하여 rapid_doc 모듈 import 가능하게
@@ -482,9 +483,13 @@ def run_dxnn_model(model_path: str, input_data: np.ndarray, target_size: int = 7
     """
     # 전처리
     preprocess_result = preprocess(input_data, target_size=target_size)
+    
+    io = InferenceOption()
+    io.devices = get_dxnn_devices()
+    io.bound_option = InferenceOption.BOUND_OPTION.NPU_ALL
 
     # DX Engine 추론
-    session = InferenceEngine(model_path)
+    session = InferenceEngine(model_path, io)
     output = session.run([preprocess_result['img']])
     
     return {

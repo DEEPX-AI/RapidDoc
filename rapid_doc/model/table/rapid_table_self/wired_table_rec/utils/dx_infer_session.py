@@ -5,10 +5,12 @@ from typing import Union, Dict, Any
 import numpy as np
 
 from .logger import get_logger
-from dx_engine import InferenceEngine
+from dx_engine import InferenceEngine, InferenceOption
+from rapid_doc.utils.device_utils import get_dxnn_devices
 
 class DxInferSession:
-    def __init__(self, config: Dict[str, Any], use_async: bool = False):
+    def __init__(self, config: Dict[str, Any], use_async: bool = False,
+                 device_ids: list = None, device_lock=None):
         """
         config에서 받는 항목:
         - model_path: 모델 파일 경로
@@ -18,11 +20,16 @@ class DxInferSession:
         """
         self.logger = get_logger("OrtInferSession")
         self.use_async = use_async
+        self._device_lock = device_lock
 
         model_path = config.get("model_path", None)
         self._verify_model(model_path)
         
-        self.session = InferenceEngine(model_path)
+        self.io = InferenceOption()
+        self.io.devices = device_ids if device_ids is not None else get_dxnn_devices()
+        self.io.bound_option = InferenceOption.BOUND_OPTION.NPU_ALL
+        
+        self.session = InferenceEngine(model_path, self.io)
         
         # register_callback 사용하지 않음 — C++ 워커 스레드에서 Python 콜백 호출 시
         # GIL 문제로 segfault 발생 위험 (Layout에서 동일 문제 확인됨)

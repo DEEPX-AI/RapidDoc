@@ -7,7 +7,8 @@ import queue
 from ..utils.typings import RapidLayoutInput
 from .base import InferSession
 from ..utils.logger import Logger
-from dx_engine import InferenceEngine
+from dx_engine import InferenceEngine, InferenceOption
+from rapid_doc.utils.device_utils import get_dxnn_devices
 from onnxruntime import InferenceSession
 
 
@@ -26,8 +27,14 @@ class DXInferSession(InferSession):
         self._verify_model(model_path)
         self.model_path = model_path
         self.logger.info(f"Using {model_path}")
+        self._device_lock = getattr(cfg, 'device_lock', None)
+        device_ids = getattr(cfg, 'device_ids', None)
 
-        self.session = InferenceEngine(str(self.model_path))
+        self.io = InferenceOption()
+        self.io.devices = device_ids if device_ids is not None else get_dxnn_devices()
+        self.io.bound_option = InferenceOption.BOUND_OPTION.NPU_ALL
+        
+        self.session = InferenceEngine(str(self.model_path), self.io)
         self.sub_session = InferenceSession(str(cfg.sub_model_path))
         
         # Additional attributes for async callback support

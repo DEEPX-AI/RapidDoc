@@ -9,7 +9,8 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 from pypdfium2 import PdfDocument
 import onnxruntime as ort
-from dx_engine import InferenceEngine
+from dx_engine import InferenceEngine, InferenceOption
+from rapid_doc.utils.device_utils import get_dxnn_devices
 
 # 프로젝트 루트를 sys.path에 추가
 project_root = Path(__file__).parent.parent
@@ -266,7 +267,12 @@ def run_dxnn(part1_path: str, part2_path: str, pdf_path: str, page_num: int = 0,
     
     # 프로바이더 설정 (CPU)
     providers = ['CPUExecutionProvider']
-    dxnn_session = InferenceEngine(part1_path)   
+
+    io = InferenceOption()
+    io.devices = get_dxnn_devices()
+    io.bound_option = InferenceOption.BOUND_OPTION.NPU_ALL
+    
+    dxnn_session = InferenceEngine(part1_path, io)   
     
     ort_session = ort.InferenceSession(
         part2_path,

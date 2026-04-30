@@ -4,7 +4,7 @@
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
 
@@ -32,6 +32,8 @@ class RapidTableInput:
     use_ocr: bool = True
     ocr_params: dict = field(default_factory=dict)
     use_async: bool = False  # Async 모드 사용 여부
+    device_ids: Optional[list] = None
+    device_lock: Any = None
 
 
 @dataclass

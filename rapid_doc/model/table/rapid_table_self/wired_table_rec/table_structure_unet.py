@@ -36,7 +36,10 @@ class TSRUnet:
         
         if engine_type == "dxengine":
             from .utils.dx_infer_session import DxInferSession
-            self.session = DxInferSession(config, use_async=use_async)
+            device_ids = config.get("device_ids")
+            device_lock = config.get("device_lock")
+            self.session = DxInferSession(config, use_async=use_async,
+                                          device_ids=device_ids, device_lock=device_lock)
         else:  # onnxruntime (기본값)
             self.session = OrtInferSession(config)
         self.engine_type = engine_type

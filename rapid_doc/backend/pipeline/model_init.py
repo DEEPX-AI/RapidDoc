@@ -11,7 +11,7 @@ from ...model.ocr.dx_ocr import DxOcrModel
 from ...model.table.rapid_table import RapidTableModel
 from ...utils.hash_utils import make_hashable
 
-def table_model_init(ocr_config=None, table_config=None):
+def table_model_init(ocr_config=None, table_config=None, device_ids=None, device_lock=None):
     use_async = table_config.get('use_async', False) if table_config else False
     atom_model_manager = AtomModelSingleton()
     ocr_engine = atom_model_manager.get_atom_model(
@@ -21,7 +21,8 @@ def table_model_init(ocr_config=None, table_config=None):
         ocr_config=ocr_config,
         enable_merge_det_boxes=False
     )
-    table_model = RapidTableModel(ocr_engine, table_config, use_async=use_async)
+    table_model = RapidTableModel(ocr_engine, table_config, use_async=use_async,
+                                   device_ids=device_ids, device_lock=device_lock)
     return table_model
 
 def formula_model_init(formula_config=None):
@@ -35,7 +36,9 @@ def layout_model_init(layout_config=None):
     model = RapidLayoutModel(layout_config, use_async=use_async)
     return model
 
-def ocr_model_init(det_db_box_thresh=0.3, ocr_config=None, det_db_unclip_ratio=1.8, enable_merge_det_boxes=True):
+def ocr_model_init(det_db_box_thresh=0.3, ocr_config=None, det_db_unclip_ratio=1.8, enable_merge_det_boxes=True,
+                   det_device_ids=None, det_device_lock=None,
+                   rec_device_ids=None, rec_device_lock=None):
     # DX Engine 사용 여부 확인
     use_dx_engine = False
     use_async = False
@@ -60,6 +63,10 @@ def ocr_model_init(det_db_box_thresh=0.3, ocr_config=None, det_db_unclip_ratio=1
             lang=None,  # lang은 실제로 사용되지 않음
             ocr_config=ocr_config,
             use_async=use_async,
+            det_device_ids=det_device_ids,
+            det_device_lock=det_device_lock,
+            rec_device_ids=rec_device_ids,
+            rec_device_lock=rec_device_lock,
         )
     else:
         # 기존 RapidOCR 사용 - DX Engine 전용 설정 제거
@@ -94,31 +101,87 @@ def ocr_model_init(det_db_box_thresh=0.3, ocr_config=None, det_db_unclip_ratio=1
 class AtomModelSingleton:
     _instance = None
     _models = {}
+    _allocator = None
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
+    @classmethod
+    def set_allocator(cls, allocator):
+        """파이프라인 시작 전에 DeviceAllocator를 설정한다."""
+        cls._allocator = allocator
+
+    @classmethod
+    def reset(cls):
+        """테스트용: 싱글톤 상태 초기화."""
+        cls._instance = None
+        cls._models = {}
+        cls._allocator = None
+
     def get_atom_model(self, atom_model_name: str, **kwargs):
-        if atom_model_name in [AtomicModel.Layout]:
-            key = (atom_model_name, make_hashable(kwargs.get('layout_config', None)))
-        elif atom_model_name in [AtomicModel.OCR]:
-            key = (atom_model_name, make_hashable(kwargs.get('ocr_config', None)))
-        elif atom_model_name in [AtomicModel.Table]:
-            key = (atom_model_name, make_hashable(kwargs.get('table_config', None)))
-        elif atom_model_name in [AtomicModel.FORMULA]:
-            key = (atom_model_name, make_hashable(kwargs.get('formula_config', None)))
+        allocator = self.__class__._allocator
+
+        # hybrid 모드: device 정보를 cache key에 포함
+        if allocator and allocator.hybrid:
+            if atom_model_name == AtomicModel.OCR:
+                extra_key = (
+                    tuple(allocator.get_devices("ocr_det")),
+                    tuple(allocator.get_devices("ocr_rec")),
+                )
+            elif atom_model_name == AtomicModel.Layout:
+                extra_key = tuple(allocator.get_devices("layout"))
+            elif atom_model_name == AtomicModel.Table:
+                extra_key = tuple(allocator.get_devices("table"))
+            else:
+                extra_key = None
         else:
-            key = atom_model_name
+            extra_key = None
+
+        if atom_model_name in [AtomicModel.Layout]:
+            key = (atom_model_name, make_hashable(kwargs.get('layout_config', None)), extra_key)
+        elif atom_model_name in [AtomicModel.OCR]:
+            key = (atom_model_name, make_hashable(kwargs.get('ocr_config', None)), extra_key)
+        elif atom_model_name in [AtomicModel.Table]:
+            key = (atom_model_name, make_hashable(kwargs.get('table_config', None)), extra_key)
+        elif atom_model_name in [AtomicModel.FORMULA]:
+            key = (atom_model_name, make_hashable(kwargs.get('formula_config', None)), extra_key)
+        else:
+            key = (atom_model_name, extra_key)
 
         if key not in self._models:
+            # hybrid 모드: device params 주입
+            if allocator and allocator.hybrid:
+                if atom_model_name == AtomicModel.Layout:
+                    kwargs['_device_ids'] = allocator.get_devices("layout")
+                    kwargs['_device_lock'] = allocator.get_lock("layout")
+                elif atom_model_name == AtomicModel.OCR:
+                    kwargs['_det_device_ids'] = allocator.get_devices("ocr_det")
+                    kwargs['_det_device_lock'] = allocator.get_lock("ocr_det")
+                    kwargs['_rec_device_ids'] = allocator.get_devices("ocr_rec")
+                    kwargs['_rec_device_lock'] = allocator.get_lock("ocr_rec")
+                elif atom_model_name == AtomicModel.Table:
+                    kwargs['_device_ids'] = allocator.get_devices("table")
+                    kwargs['_device_lock'] = allocator.get_lock("table")
             self._models[key] = atom_model_init(model_name=atom_model_name, **kwargs)
         return self._models[key]
 
 def atom_model_init(model_name: str, **kwargs):
+    # hybrid device params 추출 (모델 생성자에 직접 전달하지 않음)
+    device_ids = kwargs.pop('_device_ids', None)
+    device_lock = kwargs.pop('_device_lock', None)
+    det_device_ids = kwargs.pop('_det_device_ids', None)
+    det_device_lock = kwargs.pop('_det_device_lock', None)
+    rec_device_ids = kwargs.pop('_rec_device_ids', None)
+    rec_device_lock = kwargs.pop('_rec_device_lock', None)
+
     atom_model = None
     if model_name == AtomicModel.Layout:
+        layout_config = kwargs.get('layout_config') or {}
+        if device_ids is not None:
+            layout_config = {**layout_config, 'device_ids': device_ids, 'device_lock': device_lock}
+            kwargs['layout_config'] = layout_config
         atom_model = layout_model_init(
             kwargs.get('layout_config'),
         )
@@ -131,12 +194,18 @@ def atom_model_init(model_name: str, **kwargs):
             kwargs.get('det_db_box_thresh', 0.6),
             kwargs.get('ocr_config'),
             kwargs.get('det_db_unclip_ratio', 2.0),
-            kwargs.get('enable_merge_det_boxes', True)
+            kwargs.get('enable_merge_det_boxes', True),
+            det_device_ids=det_device_ids,
+            det_device_lock=det_device_lock,
+            rec_device_ids=rec_device_ids,
+            rec_device_lock=rec_device_lock,
         )
     elif model_name == AtomicModel.Table:
         atom_model = table_model_init(
             kwargs.get('ocr_config'),
             kwargs.get('table_config'),
+            device_ids=device_ids,
+            device_lock=device_lock,
         )
     else:
         logger.error('model name not allow')

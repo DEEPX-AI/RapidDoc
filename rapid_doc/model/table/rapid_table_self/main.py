@@ -60,7 +60,9 @@ class RapidTable:
                 model_path=self.cfg.model_dir_or_path, 
                 use_cuda=self.cfg.engine_cfg.get('use_cuda', False), 
                 engine_type=self.cfg.engine_type,
-                use_async=self.cfg.use_async
+                use_async=self.cfg.use_async,
+                device_ids=self.cfg.device_ids,
+                device_lock=self.cfg.device_lock,
             )
             return WiredTableRecognition(wired_input)
 

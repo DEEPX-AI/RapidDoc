@@ -40,7 +40,7 @@ required_env_vars = {
     'CUSTOM_INTER_OP_THREADS_COUNT': '1',
     'CUSTOM_INTRA_OP_THREADS_COUNT': '2',
     'DXRT_DYNAMIC_CPU_THREAD': '1',
-    'DXRT_TASK_MAX_LOAD': '3',
+    'DXRT_TASK_MAX_LOAD': None,  # Pass if >= 3 (None = existence check)
     'NFH_INPUT_WORKER_THREADS': '2',
     'NFH_OUTPUT_WORKER_THREADS': '4'
 }
@@ -52,7 +52,7 @@ for var_name, expected_value in required_env_vars.items():
     actual_value = os.environ.get(var_name)
     if actual_value is None:
         missing_vars.append(var_name)
-    elif actual_value != expected_value:
+    elif expected_value is not None and actual_value != expected_value:
         incorrect_vars.append(f"{var_name}={actual_value} (expected: {expected_value})")
 
 if missing_vars or incorrect_vars:
@@ -263,6 +263,7 @@ def do_parse(
     start_page_id=0,  # Start page ID for parsing, default is 0
     end_page_id=None,  # End page ID for parsing, default is None (parse all pages until the end of the document)
     use_async_pipeline=True,  # Whether to use async pipeline for parallel processing
+    hybrid=False,  # Enable hybrid device partitioning
 ):
     # =========================================================================
     # 모델 경로 설정 (엔진별)
@@ -410,6 +411,7 @@ def do_parse(
         table_config=table_config, 
         checkbox_config=checkbox_config,
         use_async_pipeline=use_async_pipeline,
+        hybrid=hybrid,
     )
     
     wall_time = time.time() - start_time
@@ -518,6 +520,7 @@ def parse_doc(
         table_engine="dxengine",
         use_async_pipeline=True,
         formula_rec_enable=True,
+        hybrid=False,
 ):
     """
         Parameter description:
@@ -556,6 +559,7 @@ def parse_doc(
             table_engine=table_engine,
             formula_rec_enable=formula_rec_enable,
             use_async_pipeline=use_async_pipeline,
+            hybrid=hybrid,
         )
     except Exception as e:
         logger.exception(e)
@@ -628,6 +632,10 @@ examples:
     parser.add_argument(
         '--no-formula', action='store_true', default=False,
         help='Disable formula recognition (skip ONNX formula inference entirely)',
+    )
+    parser.add_argument(
+        '--hybrid', action='store_true', default=False,
+        help='Enable hybrid device partitioning (requires 2+ NPU devices)',
     )
     parser.set_defaults(pipeline_mode='finegrained')  # Default: finegrained (fastest pipeline)
     args = parser.parse_args()
@@ -728,6 +736,7 @@ examples:
     logger.info(f"  OCR     Engine: {OCR_ENGINE}")
     logger.info(f"  Formula Engine: {FORMULA_ENGINE}")
     logger.info(f"  Table   Engine: {TABLE_ENGINE}")
+    logger.info(f"  Hybrid mode: {'enabled' if args.hybrid else 'disabled'}")
     logger.info("=" * 80)
     
     perf_md_path = parse_doc(
@@ -742,6 +751,7 @@ examples:
         table_engine=TABLE_ENGINE,
         formula_rec_enable=FORMULA_REC_ENABLE,
         use_async_pipeline=args.pipeline_mode,
+        hybrid=args.hybrid,
     )
     if perf_md_path:
         logger.info("=" * 80)

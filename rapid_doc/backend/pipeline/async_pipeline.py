@@ -1,19 +1,18 @@
 """
-진정한 비동기 파이프라인 처리 모듈
-DX Engine run_async() + register_callback을 활용한 CPU-하드웨어 오버랩 문서 분석
+True Async Pipeline Processing Module
+CPU-HW Overlap Analysis using DX Engine run_async() + register_callback
 
-Stage DAG (각 스테이지는 모든 페이지 작업을 한꺼번에 배치 제출):
-    Stage 1: Layout      — 전(全) 페이지 run_async 병렬 제출
-    Stage 2: 영역 플래닝  — layout 결과 → OCR/테이블/수식 후보 분류 (CPU)
-    Stage 3: Formula     — 전(全) 수식 영역 batch_predict
-    Stage 4: PDF-det     — PDF 텍스트 직접 추출 (모델 없음, CPU)
-    Stage 5: OCR-det     — 전(全) OCR 후보 영역 배치 검출
-    Stage 6: Table       — 전(全) 테이블 순차 처리 (OCR-det 결과 포함)
-    Stage 7: OCR-rec     — 전(全) 텍스트 크롭 일괄 인식
+    Stage DAG (Batch submission per stage):
+    Stage 1: Layout      - Parallel run_async for all pages
+    Stage 2: Area Plan   - Classify layout results into OCR/Table/Formula (CPU)
+    Stage 4: PDF-det     - Direct text extraction (No model, CPU) [Pre-req]
+    Stage 3||5: Formula(CPU) + OCR-det(NPU) - Parallel execution
+    Stage 6: Table       - Sequential processing for all tables (Incl. OCR-det results)
+    Stage 7: OCR-rec     - Batch recognition for all text crops
 
-StreamingPipeline (스트리밍 파이프라인):
-    각 스테이지를 독립 스레드로 실행하고 queue.Queue로 PageContext를 전달.
-    한 페이지씩 어셈블리 라인 방식으로 처리하여 레이턴시를 최적화한다.
+StreamingPipeline:
+Runs stages as independent threads; passes PageContext via queue.Queue.
+Optimizes latency via assembly-line processing (per-page).
 """
 
 import os
@@ -153,12 +152,8 @@ class TrueAsyncPipeline:
 
         self._stage_layout(contexts)            # Stage 1
         self._stage_plan_regions(contexts)      # Stage 2
-        if self.formula_enable and self.formula_rec_enable:
-            self._stage_formula(contexts)       # Stage 3
-        elif self.formula_enable:
-            logger.info("[Stage 3/7] Formula — rec disabled (formula_rec_enable=False), kept as image")
-        self._stage_pdf_det(contexts)           # Stage 4
-        self._stage_ocr_det(contexts)           # Stage 5
+        self._stage_pdf_det(contexts)           # Stage 4 (선행 — OCR-det의 skip 플래그 설정)
+        self._run_parallel_formula_ocr_det(contexts)  # Stage 3∥5 병렬
         if self.table_enable:
             self._stage_table(contexts)         # Stage 6
         self._stage_ocr_rec(contexts)           # Stage 7
@@ -358,6 +353,46 @@ class TrueAsyncPipeline:
             if self.verbose:
                 logger.info(f"[Stage 4/7] PDF-det — {count} regions in {elapsed:.3f}s")
 
+    # ──────────────── Stage 3∥5: Formula(CPU) + OCR-det(NPU) 병렬 ─────────────
+
+    def _run_parallel_formula_ocr_det(self, contexts: List[PageContext]) -> None:
+        """Formula(CPU)와 OCR-det(NPU)를 병렬 실행한다.
+
+        전제조건: _stage_pdf_det이 먼저 완료되어 _pdf_det_done 플래그가 설정됨.
+        """
+        cpu_error: List[Optional[Exception]] = [None]
+        npu_error: List[Optional[Exception]] = [None]
+
+        def cpu_worker():
+            try:
+                if self.formula_enable and self.formula_rec_enable:
+                    self._stage_formula(contexts)
+                elif self.formula_enable:
+                    logger.info("[Stage 3/7] Formula — rec disabled, kept as image")
+            except Exception as e:
+                cpu_error[0] = e
+
+        def npu_worker():
+            try:
+                self._stage_ocr_det(contexts)
+            except Exception as e:
+                npu_error[0] = e
+
+        t_cpu = threading.Thread(target=cpu_worker, name="stage-formula-cpu", daemon=True)
+        t_npu = threading.Thread(target=npu_worker, name="stage-ocr-det-npu", daemon=True)
+        t_cpu.start()
+        t_npu.start()
+        t_cpu.join()
+        t_npu.join()
+
+        if cpu_error[0] and npu_error[0]:
+            logger.error(f"[Stage 3∥5] NPU error also occurred: {npu_error[0]}")
+            raise cpu_error[0]
+        if cpu_error[0]:
+            raise cpu_error[0]
+        if npu_error[0]:
+            raise npu_error[0]
+
     # ─────────────────────────── Stage 5: OCR-det ────────────────────────────
 
     def _should_skip_ocr_det(self, ctx: PageContext, res: dict) -> bool:
@@ -546,12 +581,82 @@ class TrueAsyncPipeline:
         """
         return None
 
+    def _process_tables_parallel(
+        self,
+        table_model,
+        items: list,
+    ) -> None:
+        """
+        듀얼 스레드로 테이블 목록을 병렬 처리.
+        Phase 1: prepare_image (순차)
+        Phase 2: UNET + OCR (병렬 스레드)
+        Phase 3: build_html (순차)
+        """
+        n = len(items)
+        if n == 0:
+            return
+
+        # Phase 1: 준비
+        prepared = []
+        for ctx, ti in items:
+            bgr_image, is_rotated = table_model.prepare_image(ti['table_img'])
+            adjusted = get_adjusted_mfdetrec_res(
+                ctx.formula_regions + ctx.checkbox_res,
+                ti['useful_list'],
+                return_text=True,
+            )
+            fill_image_res = extract_table_fill_image(ctx.page_dict, ti, scale=ctx.scale)
+            prepared.append((bgr_image, adjusted, fill_image_res))
+
+        # Phase 2: 병렬 실행
+        unet_results = [None] * n
+        ocr_results = [None] * n
+        unet_error = [None]
+        ocr_error = [None]
+
+        def unet_worker():
+            try:
+                for i, (bgr, _, fill_res) in enumerate(prepared):
+                    unet_results[i] = table_model.run_unet(bgr, fill_image_res=fill_res)
+            except Exception as e:
+                unet_error[0] = e
+
+        def ocr_worker():
+            try:
+                for i, (bgr, adjusted, _) in enumerate(prepared):
+                    ocr_results[i] = table_model.run_ocr(bgr, mfd_res=adjusted)
+            except Exception as e:
+                ocr_error[0] = e
+
+        t_unet = threading.Thread(target=unet_worker, name="table-unet", daemon=True)
+        t_ocr = threading.Thread(target=ocr_worker, name="table-ocr", daemon=True)
+        t_unet.start()
+        t_ocr.start()
+        t_unet.join()
+        t_ocr.join()
+
+        if unet_error[0]:
+            if ocr_error[0]:
+                logger.error("OCR thread also failed: %s", ocr_error[0])
+            raise unet_error[0]
+        if ocr_error[0]:
+            raise ocr_error[0]
+
+        # Phase 3: 결합
+        for i, (ctx, ti) in enumerate(items):
+            _, adjusted, fill_res = prepared[i]
+            html_code, _, _, _ = table_model.build_html(
+                unet_results[i],
+                ocr_results[i],
+                fill_image_res=fill_res,
+                mfd_res=adjusted,
+                skip_text_in_image=self.skip_text_in_image,
+                use_img2table=self.use_img2table,
+            )
+            self._apply_table_html(ti, html_code)
+
     def _stage_table(self, contexts: List[PageContext]) -> None:
-        """
-        모든 테이블 후보를 모아 순차 처리한다.
-        table_model.predict 호출 전에 OCR-det를 통해 텍스트 박스를 준비하여
-        Table 모델 내부의 중복 OCR 실행을 방지한다.
-        """
+        """모든 테이블 후보를 모아 듀얼 스레드 병렬 처리한다."""
         all_items = [
             (ctx, ti)
             for ctx in contexts
@@ -572,30 +677,8 @@ class TrueAsyncPipeline:
             ocr_config=self.ocr_config,
             table_config=self.table_config,
         )
-        ocr_model_for_table = self.atom_model_manager.get_atom_model(
-            atom_model_name=AtomicModel.OCR,
-            ocr_show_log=False,
-            det_db_box_thresh=0.3,
-            ocr_config=self.ocr_config,
-            enable_merge_det_boxes=False,
-        )
 
-        with tqdm(total=n, desc="Table Predict") as pbar:
-            for ctx, ti in all_items:
-                adjusted = get_adjusted_mfdetrec_res(
-                    ctx.formula_regions + ctx.checkbox_res,
-                    ti['useful_list'],
-                    return_text=True,
-                )
-                ocr_result = self._prepare_table_ocr_result(ocr_model_for_table, ctx, ti)
-                fill_image_res = extract_table_fill_image(ctx.page_dict, ti, scale=ctx.scale)
-
-                html_code, _, _, _ = table_model.predict(
-                    ti['table_img'], ocr_result, fill_image_res,
-                    adjusted, self.skip_text_in_image, self.use_img2table,
-                )
-                self._apply_table_html(ti, html_code)
-                pbar.update(1)
+        self._process_tables_parallel(table_model, all_items)
 
         elapsed = time.perf_counter() - t0
         self._record_perf('table', elapsed, n, contexts)
@@ -890,7 +973,7 @@ class TrueAsyncPipeline:
             self._accumulate_perf('ocr_det', time.perf_counter() - t0, count, ctx)
 
     def _table_one(self, ctx: PageContext) -> None:
-        """단일 페이지 테이블 인식."""
+        """단일 페이지 테이블 인식 (듀얼 스레드 병렬)."""
         if not ctx.table_candidates:
             return
         t0 = time.perf_counter()
@@ -899,26 +982,8 @@ class TrueAsyncPipeline:
             ocr_config=self.ocr_config,
             table_config=self.table_config,
         )
-        ocr_model_for_table = self.atom_model_manager.get_atom_model(
-            atom_model_name=AtomicModel.OCR,
-            ocr_show_log=False,
-            det_db_box_thresh=0.3,
-            ocr_config=self.ocr_config,
-            enable_merge_det_boxes=False,
-        )
-        for ti in ctx.table_candidates:
-            ocr_result = self._prepare_table_ocr_result(ocr_model_for_table, ctx, ti)
-            fill_image_res = extract_table_fill_image(ctx.page_dict, ti, scale=ctx.scale)
-            adjusted = get_adjusted_mfdetrec_res(
-                ctx.formula_regions + ctx.checkbox_res,
-                ti['useful_list'],
-                return_text=True,
-            )
-            html_code, _, _, _ = table_model.predict(
-                ti['table_img'], ocr_result, fill_image_res,
-                adjusted, self.skip_text_in_image, self.use_img2table,
-            )
-            self._apply_table_html(ti, html_code)
+        items = [(ctx, ti) for ti in ctx.table_candidates]
+        self._process_tables_parallel(table_model, items)
         n = len(ctx.table_candidates)
         self._accumulate_perf('table', time.perf_counter() - t0, n, ctx)
 
@@ -1320,6 +1385,7 @@ def async_batch_image_analyze(
     checkbox_config: dict = None,
     input_interval: float = 0.0,   # pipeline_analyze.py 하위 호환 — 미사용
     verbose: bool = False,
+    hybrid: bool = False,
 ) -> Tuple[List[Any], Dict]:
     """
     TrueAsyncPipeline을 사용한 배치 이미지 분석 (공개 API).
@@ -1350,6 +1416,7 @@ def async_batch_image_analyze(
         ocr_config=ocr_config,
         formula_config=formula_config,
         table_config=table_config,
+        hybrid=hybrid,
     )
 
     pipeline = TrueAsyncPipeline(
@@ -1382,6 +1449,7 @@ def finegrained_streaming_batch_image_analyze(
     checkbox_config: dict = None,
     input_interval: float = 0.0,   # 하위 호환 — 미사용
     verbose: bool = False,
+    hybrid: bool = False,
 ) -> Tuple[List[Any], Dict]:
     """
     FinegrainedStreamingPipeline을 사용한 배치 이미지 분석 (공개 API).
@@ -1406,6 +1474,7 @@ def finegrained_streaming_batch_image_analyze(
         ocr_config=ocr_config,
         formula_config=formula_config,
         table_config=table_config,
+        hybrid=hybrid,
     )
 
     pipeline = FinegrainedStreamingPipeline(
