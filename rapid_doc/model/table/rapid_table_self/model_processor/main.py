@@ -21,8 +21,6 @@ class ModelProcessor:
 
     @classmethod
     def get_model_path(cls, model_type: ModelType) -> Union[str, Dict[str, str]]:
-        if model_type == ModelType.UNITABLE:
-            return cls.get_multi_models_dict(model_type)
         return cls.get_single_model_path(model_type)
 
     @classmethod

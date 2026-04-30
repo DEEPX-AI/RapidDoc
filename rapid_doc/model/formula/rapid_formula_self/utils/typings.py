@@ -19,7 +19,6 @@ class ModelType(Enum):
 class EngineType(Enum):
     ONNXRUNTIME = "onnxruntime"
     DXENGINE = "dxengine"
-    # OPENVINO = "openvino"
 
 
 @dataclass

@@ -60,7 +60,7 @@ onnx_models/
 ### 기본 실행
 
 ```bash
-# 기본 설정으로 demo/pdfs 디렉토리의 PDF 파일 처리
+# 기본 설정으로 test_files 디렉토리의 PDF 파일 처리
 python demo/demo_offline.py
 ```
 
@@ -75,7 +75,7 @@ python demo/demo_offline.py --help
 | 옵션 | 설명 | 기본값 |
 |------|------|--------|
 | `-h, --help` | 도움말 표시 | - |
-| `--input-dir DIR` | 입력 PDF 파일 디렉토리 | `demo/pdfs` |
+| `--input-dir DIR` | 입력 PDF 파일 디렉토리 | `test_files` |
 | `--output-dir DIR` | 출력 디렉토리 | `demo/output-offline` |
 | `--layout-engine ENGINE` | Layout 엔진 선택 | `dxengine` |
 | `--ocr-engine ENGINE` | OCR 엔진 선택 | `dxengine` |

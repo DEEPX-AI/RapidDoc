@@ -40,7 +40,7 @@ class BatchAnalyze:
         self.batch_ratio = batch_ratio
         self.formula_enable = get_formula_enable(formula_enable)
         self.formula_rec_enable = formula_config.get("formula_rec_enable", True) if formula_config else True
-        self.formula_level = formula_config.get("formula_level", 0) if formula_config else 0
+        self.formula_level = formula_config.get("formula_level", 2) if formula_config else 2
         self.table_enable = get_table_enable(table_enable)
         self.table_force_ocr = table_config.get("force_ocr", False) if table_config else False
         self.skip_text_in_image = table_config.get("skip_text_in_image", True) if table_config else True
@@ -164,8 +164,10 @@ class BatchAnalyze:
                    f"{len(np_images)/layout_time:.2f} it/s")
         # =====================================================================
 
-        # formula_level: formula recognition level, default 0 for all formulas.
-        # When level is 1 (keep only interline formulas), filter category_id == 13 (inline_formula)
+        # formula_level: formula recognition level
+        #   0: all formulas → LaTeX recognition
+        #   1: interline only (remove inline from layout), interline → LaTeX
+        #   2 (default): inline → LaTeX, interline → image fallback (skip LaTeX)
         if self.formula_enable and self.formula_level == 1:
             images_layout_res = [
                 [item for item in page if item["category_id"] != 13]
@@ -223,6 +225,12 @@ class BatchAnalyze:
                                                 'pdf_idx': pdf_indices[index],
                                               })
             for latex_res in single_page_mfdetrec_res:
+                # formula_level=2: 행간 수식(cat 8,14)은 LaTeX 추론 스킵 → 이미지 폴백
+                if self.formula_level == 2 and latex_res.get("category_id") in (
+                    CategoryId.InterlineEquation_Layout,
+                    CategoryId.InterlineEquation_YOLO,
+                ):
+                    continue
                 latex_img, _ = crop_img(latex_res, np_img)
                 latex_res_list_all_page.append({'latex_res': latex_res,
                                                 'lang': _lang,
@@ -637,8 +645,12 @@ class BatchAnalyze:
                         logger.debug(f"✅ Table {table_count+1} processing complete: {table_predict_time:.2f}s")
                         # Validate return content
                         if html_code:
+                            # Check for image fallback marker
+                            if "data-fallback='image'" in html_code:
+                                table_res_dict['table_res']['html'] = html_code
+                                logger.info(f"Table {table_count+1}: using image fallback")
                             # Ensure html_code contains table tags
-                            if '<table>' in html_code and '</table>' in html_code:
+                            elif '<table>' in html_code and '</table>' in html_code:
                                 # Store trimmed HTML table content
                                 start_index = html_code.find('<table>')
                                 end_index = html_code.rfind('</table>') + len('</table>')

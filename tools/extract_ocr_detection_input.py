@@ -450,13 +450,13 @@ Examples:
   # 기본 사용
   python extract_ocr_detection_input.py \\
       --json_path demo/output-offline/demo1/auto/demo1_model.json \\
-      --pdf_path demo/pdfs/demo1.pdf \\
+      --pdf_path test_files/BVRC_Meeting_Minutes_2024-04_origin.pdf \\
       --output_dir output/ocr_detection_dataset
 
   # 최대 50개 샘플
   python extract_ocr_detection_input.py \\
       --json_path demo/output-offline/demo1/auto/demo1_model.json \\
-      --pdf_path demo/pdfs/demo1.pdf \\
+      --pdf_path test_files/BVRC_Meeting_Minutes_2024-04_origin.pdf \\
       --output_dir output/ocr_detection_50 \\
       --max_samples 50
         """

@@ -310,7 +310,7 @@ async def aio_do_parse(
 
 
 if __name__ == "__main__":
-    # pdf_path = "../../demo/pdfs/demo3.pdf"
+    # pdf_path = "../../test_files/BVRC_Meeting_Minutes_2024-04_origin.pdf"
     pdf_path = "C:/Users/zhaoxiaomeng/Downloads/4546d0e2-ba60-40a5-a17e-b68555cec741.pdf"
 
     try:

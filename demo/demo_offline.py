@@ -12,7 +12,7 @@ Usage:
 
     # Example curl call (server must be running):
     curl -X POST "http://localhost:8888/file_parse" \\
-      -F "files=@demo/pdfs/example.pdf" \\
+      -F "files=@test_files/BVRC_Meeting_Minutes_2024-04_origin.pdf" \\
       -F "output_dir=./output-api" \\
       -F "formula_enable=true" \\
       -F "table_enable=true" \\
@@ -174,8 +174,8 @@ def _build_perf_summary_md(
 
     lines.append("## Overall Pipeline Performance")
     lines.append("")
-    lines.append("| Pipeline Step | Avg Latency | Throughput |")
-    lines.append("|:---|---:|---:|")
+    lines.append("| Pipeline Step | Count | Avg Latency | Throughput | Time (s) | Ratio |")
+    lines.append("|:---|---:|---:|---:|---:|---:|")
     for key in stage_order:
         if key not in agg or agg[key]['time'] <= 0:
             continue
@@ -183,8 +183,9 @@ def _build_perf_summary_md(
         t, c = s['time'], s['count']
         avg_ms = (t / max(c, 1)) * 1000
         fps = c / max(t, 0.001)
+        ratio = (t / total_stage_time * 100) if total_stage_time > 0 else 0
         label = stage_labels.get(key, key)
-        lines.append(f"| {label} | {avg_ms:.2f} ms | {fps:.1f} FPS |")
+        lines.append(f"| {label} | {c} | {avg_ms:.2f} ms | {fps:.1f} FPS | {t:.2f} | {ratio:.1f}% |")
     lines.append("")
     lines.append(f"- **Total Stages**: {total_stage_time:.2f} s")
     lines.append("")
@@ -193,16 +194,16 @@ def _build_perf_summary_md(
     if len(all_pdf_perf_stats) > 1:
         lines.append("## Per-Document Elapsed Time")
         lines.append("")
-        lines.append("| Document | Total Time (s) | Pages |")
-        lines.append("|:---|---:|---:|")
+        lines.append("| Document | Pages | Total Time (s) | Avg/Page (s) | Inferences |")
+        lines.append("|:---|---:|---:|---:|---:|")
         for pdf_idx in sorted(all_pdf_perf_stats.keys()):
             pdf_stats = all_pdf_perf_stats[pdf_idx]
             doc_total = sum(s['time'] for s in pdf_stats.values())
-            page_count = max(
-                (s['count'] for s in pdf_stats.values()), default=0
-            )
+            page_count = pdf_stats.get('layout', {}).get('count', 0)
+            inferences = sum(s['count'] for s in pdf_stats.values())
+            avg_per_page = f"{doc_total / page_count:.2f}" if page_count > 0 else "-"
             pdf_name = pdf_file_names[pdf_idx] if pdf_idx < len(pdf_file_names) else f"PDF #{pdf_idx}"
-            lines.append(f"| {pdf_name} | {doc_total:.2f} | {page_count} |")
+            lines.append(f"| {pdf_name} | {page_count} | {doc_total:.2f} | {avg_per_page} | {inferences} |")
         lines.append("")
 
     # Per-PDF 상세 성능
@@ -213,8 +214,8 @@ def _build_perf_summary_md(
 
         lines.append(f"## {pdf_name}")
         lines.append("")
-        lines.append("| Pipeline Step | Avg Latency | Throughput |")
-        lines.append("|:---|---:|---:|")
+        lines.append("| Pipeline Step | Count | Avg Latency | Throughput | Time (s) | Ratio |")
+        lines.append("|:---|---:|---:|---:|---:|---:|")
 
         for key in stage_order:
             if key not in pdf_stats or pdf_stats[key]['time'] <= 0:
@@ -223,8 +224,9 @@ def _build_perf_summary_md(
             t, c = s['time'], s['count']
             avg_ms = (t / max(c, 1)) * 1000
             fps = c / max(t, 0.001)
+            ratio = (t / total_pdf_stage_time * 100) if total_pdf_stage_time > 0 else 0
             label = stage_labels.get(key, key)
-            lines.append(f"| {label} | {avg_ms:.2f} ms | {fps:.1f} FPS |")
+            lines.append(f"| {label} | {c} | {avg_ms:.2f} ms | {fps:.1f} FPS | {t:.2f} | {ratio:.1f}% |")
 
         lines.append("")
         lines.append(f"- **Total Stage Time**: {total_pdf_stage_time:.2f} s")
@@ -245,10 +247,10 @@ def do_parse(
     formula_enable=True,  # Enable formula parsing (model_type 명시로 해결)
     table_enable=True,  # Enable table parsing (UNET 모델 사용 - paddle_cls.onnx 불필요)
     # Engine 선택 플래그
-    layout_engine="dxengine",  # "onnxruntime", "dxengine", "openvino"
-    ocr_engine="dxengine",  # "onnxruntime", "dxengine", "openvino", "torch", "paddle"
-    formula_engine="onnxruntime",  # "onnxruntime", "dxengine", "openvino"
-    table_engine="dxengine",  # "onnxruntime", "torch"
+    layout_engine="dxengine",  # "onnxruntime", "dxengine"
+    ocr_engine="dxengine",  # "onnxruntime", "dxengine"
+    formula_engine="onnxruntime",  # "onnxruntime"
+    table_engine="dxengine",  # "onnxruntime", "dxengine"
     formula_rec_enable=True,  # False: skip ONNX formula inference, keep regions as images
     f_draw_layout_bbox=True,  # Whether to draw layout bounding boxes
     f_draw_span_bbox=True,  # Whether to draw span bounding boxes
@@ -283,10 +285,6 @@ def do_parse(
         layout_config["model_dir_or_path"] = str(dxnn_models_dir / "pp_doclayout_l_part1.dxnn")
         layout_config["sub_model_path"] = str(onnx_models_dir / "pp_doclayout_l_part2.onnx")
         logger.info("Layout model: DX Engine")
-    elif layout_engine.lower() == "openvino":
-        layout_config["engine_type"] = LayoutEngineType.OPENVINO
-        layout_config["model_dir_or_path"] = str(onnx_models_dir / "pp_doclayout_l.onnx")
-        logger.info("Layout model: OpenVINO")
     else:  # onnxruntime (default)
         layout_config["engine_type"] = LayoutEngineType.ONNXRUNTIME
         layout_config["model_dir_or_path"] = str(onnx_models_dir / "pp_doclayout_l.onnx")
@@ -352,14 +350,10 @@ def do_parse(
     if formula_engine.lower() == "dxengine":
         logger.error("=" * 80)
         logger.error("Error: Formula model is not supported by DX Engine.")
-        logger.error("Supported engines: onnxruntime, openvino")
+        logger.error("Supported engines: onnxruntime")
         logger.error("=" * 80)
         import sys
         sys.exit(1)
-    elif formula_engine.lower() == "openvino":
-        formula_config["engine_type"] = FormulaEngineType.OPENVINO
-        formula_config["model_dir_or_path"] = str(onnx_models_dir / "pp_formulanet_plus_m.onnx")
-        logger.info("Formula model: OpenVINO")
     else:  # onnxruntime (default)
         formula_config["engine_type"] = FormulaEngineType.ONNXRUNTIME
         formula_config["model_dir_or_path"] = str(onnx_models_dir / "pp_formulanet_plus_m.onnx")
@@ -370,29 +364,18 @@ def do_parse(
     # =========================================================================
     table_config = {}
     
-    # UNET_SLANET_PLUS: classify wired/wireless via paddle_cls, then process each
-    # Currently wireless model also uses UNET DX Engine (can be replaced with slanet_plus ONNX later)
-    table_config["model_type"] = TableModelType.UNET_SLANET_PLUS
-    table_config["wireless_model_type"] = "unet"
-    # cls.model_dir_or_path=None → TableCls auto-downloads from ModelScope (table_cls/models/)
+    # UNET: wired table only
+    table_config["model_type"] = TableModelType.UNET
     
     # Engine-specific Table settings
     if table_engine.lower() == "dxengine":
         table_config["engine_type"] = "dxengine"
         table_config["unet.model_dir_or_path"] = str(dxnn_models_dir / "unet.dxnn")
-        table_config["wireless_engine_type"] = "dxengine"
-        table_config["slanet_plus.model_dir_or_path"] = str(dxnn_models_dir / "unet.dxnn")
-        logger.info("Table model: UNET_SLANET_PLUS (wired=DX, wireless=DX/UNET, cls=ONNX)")
-    elif table_engine.lower() == "torch":
-        table_config["engine_type"] = "torch"
-        table_config["wireless_engine_type"] = "torch"
-        logger.info("Table model: UNET_SLANET_PLUS (wired=Torch, wireless=Torch)")
+        logger.info("Table model: UNET (wired=DX)")
     else:  # onnxruntime (default)
         table_config["engine_type"] = "onnxruntime"
         table_config["unet.model_dir_or_path"] = str(onnx_models_dir / "unet.onnx")
-        table_config["wireless_engine_type"] = "onnxruntime"
-        table_config["slanet_plus.model_dir_or_path"] = str(onnx_models_dir / "unet.onnx")
-        logger.info("Table model: UNET_SLANET_PLUS (wired=ONNX, wireless=ONNX/UNET)")
+        logger.info("Table model: UNET (wired=ONNX)")
 
     checkbox_config = {
         # 체크박스 인식 (OpenCV 기반, 오검출 가능성 있음)
@@ -586,21 +569,34 @@ if __name__ == '__main__':
         description='RapidDoc PDF Parser - Offline Mode',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+parse-method details:
+  auto  Extract text from PDF's embedded text layer first; fall back to OCR
+        on failure. Most accurate and fastest. (default)
+  ocr   Convert PDF pages to images and run full OCR inference.
+        Suitable for scanned PDFs or model evaluation.
+  txt   Use only the PDF text layer without any OCR.
+        Fastest for text-based PDFs, but produces empty results for image PDFs.
+
 examples:
-  # demo/pdfs/ 기본 디렉토리 사용
-  python demo/demo_offline.py --finegrained
+  # Process all PDFs in a directory (default: auto mode)
+  python demo/demo_offline.py /path/to/pdfs/ --finegrained
 
-  # 특정 디렉토리의 모든 PDF
-  python demo/demo_offline.py /path/to/pdf/folder --finegrained
+  # Force full OCR mode
+  python demo/demo_offline.py test_files/ --parse-method ocr --finegrained
 
-  # 개별 PDF 파일 하나 또는 여러 개
-  python demo/demo_offline.py file.pdf --no-async
+  # Text-only extraction (no OCR)
+  python demo/demo_offline.py test_files/ --parse-method txt --finegrained
+
+  # Disable formula recognition
+  python demo/demo_offline.py file.pdf --no-formula
+
+  # Multiple individual files
   python demo/demo_offline.py a.pdf b.pdf c.pdf --finegrained
         """,
     )
     parser.add_argument(
         'input', nargs='*',
-        help='PDF 파일 또는 디렉토리 경로 (생략 시 demo/pdfs/ 사용)',
+        help='PDF file or directory path (defaults to test_files/ if omitted)',
         metavar='PATH',
     )
     pipeline_group = parser.add_mutually_exclusive_group()
@@ -618,12 +614,16 @@ examples:
     )
     parser.add_argument(
         '--output-dir', dest='output_dir', default=None,
-        help='결과 저장 디렉토리 (기본: demo/output-offline-{mode}/)',
+        help='Output directory (default: demo/output-offline-{mode}/)',
         metavar='DIR',
     )
     parser.add_argument(
         '--force-ocr', action='store_true', default=False,
-        help='Ignore PDF text metadata and always use image→OCR path (for model evaluation)',
+        help='(deprecated) Alias for --parse-method ocr',
+    )
+    parser.add_argument(
+        '--parse-method', choices=['auto', 'ocr', 'txt'], default='auto',
+        help='Text extraction method: auto (PDF metadata first, OCR fallback), ocr (always OCR), txt (PDF text only)',
     )
     parser.add_argument(
         '--no-formula', action='store_true', default=False,
@@ -645,20 +645,18 @@ examples:
     # 각 모델별로 사용할 엔진을 선택할 수 있습니다.
     # 
     # 지원 엔진:
-    #   Layout  : "onnxruntime", "dxengine", "openvino"
-    #   OCR     : "onnxruntime", "dxengine", "openvino", "torch", "paddle"
-    #   Formula : "onnxruntime", "dxengine", "openvino"
-    #   Table   : "onnxruntime", "dxengine", "torch"
+    #   Layout  : "onnxruntime", "dxengine"
+    #   OCR     : "onnxruntime", "dxengine"
+    #   Formula : "onnxruntime"
+    #   Table   : "onnxruntime", "dxengine"
     #
     # 주의사항:
     #   - dxengine 사용 시: dxnn_models/ 디렉토리에 .dxnn 파일 필요
     #   - onnxruntime 사용 시: onnx_models/ 디렉토리에 .onnx 파일 필요
-    #   - openvino 사용 시: openvino 패키지 설치 필요
     #
     # 테이블 인식 관련:
-    #   - 현재 ModelType.UNET 사용 (paddle_cls.onnx 불필요)
-    #   - unet.onnx 모델만 있으면 됨 (유선 테이블 전용)
-    #   - 무선 테이블도 인식하려면 paddle_cls.onnx + slanet_plus.onnx 필요
+    #   - ModelType.UNET 사용 (유선 테이블 전용)
+    #   - unet.dxnn 또는 unet.onnx 모델 필요
     # =========================================================================
     
     LAYOUT_ENGINE = "dxengine"   # Layout 모델 엔진
@@ -694,7 +692,7 @@ examples:
             else:
                 logger.warning(f"건너뜀 (파일 없음 또는 지원하지 않는 형식): {raw}")
     else:
-        # 기본: demo/pdfs/ 디렉토리
+        # 기본: test_files/ 디렉토리
         default_dir = Path(__dir__) / "pdfs"
         doc_path_list = sorted(
             p for p in default_dir.glob('*') if p.suffix in valid_suffixes
@@ -718,7 +716,9 @@ examples:
     logger.info(f"Formula recognition: {'enabled' if FORMULA_ENABLE else 'disabled'}"
                 + ("" if FORMULA_REC_ENABLE else " (rec disabled — image only)"))
     logger.info(f"Table recognition: {'enabled' if TABLE_ENABLE else 'disabled'}")
-    logger.info(f"Parse method: {'ocr (force-ocr, no PDF metadata)' if args.force_ocr else 'auto'}")
+    # --force-ocr는 --parse-method ocr의 별칭
+    parse_method = "ocr" if args.force_ocr else args.parse_method
+    logger.info(f"Parse method: {parse_method}")
     _mode_label = {False: 'sync', True: 'async (TrueAsyncPipeline)', 'finegrained': 'finegrained (7-stage streaming)'}
     logger.info(f"Pipeline mode: {_mode_label.get(args.pipeline_mode, str(args.pipeline_mode))}")
     logger.info(f"Output dir   : {output_dir}")
@@ -733,7 +733,7 @@ examples:
     perf_md_path = parse_doc(
         doc_path_list,
         output_dir,
-        method="ocr" if args.force_ocr else "auto",
+        method=parse_method,
         formula_enable=FORMULA_ENABLE,
         table_enable=TABLE_ENABLE,
         layout_engine=LAYOUT_ENGINE,

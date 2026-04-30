@@ -2,7 +2,7 @@
 Layout 모델의 batch_predict 출력만 확인하는 스크립트
 
 사용법:
-    python value_compare/layout_doc.py --pdf ./demo/pdfs/demo1.pdf --model_type pp_doclayout_l --save_output --visualize
+    python value_compare/layout_doc.py --pdf ./test_files/BVRC_Meeting_Minutes_2024-04_origin.pdf --model_type pp_doclayout_l --save_output --visualize
 """
 import argparse
 import json

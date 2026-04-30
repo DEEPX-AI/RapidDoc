@@ -417,8 +417,8 @@ if __name__ == "__main__":
                         help='DXNN 모델 파일 경로 (part1) (기본값: ./dxnn_models/pp_doclayout_l_part1.dxnn)')
     parser.add_argument('--part2', type=str, default='./onnx_models/pp_doclayout_l_part2.onnx',
                         help='ONNX 모델 파일 경로 (part2) (기본값: ./onnx_models/pp_doclayout_l_part2.onnx)')
-    parser.add_argument('--pdf', type=str, default='./demo/pdfs/demo1.pdf',
-                        help='입력 PDF 파일 경로 (기본값: ./demo/pdfs/demo1.pdf)')
+    parser.add_argument('--pdf', type=str, default='./test_files/BVRC_Meeting_Minutes_2024-04_origin.pdf',
+                        help='입력 PDF 파일 경로 (기본값: ./test_files/BVRC_Meeting_Minutes_2024-04_origin.pdf)')
     parser.add_argument('--page', type=int, default=0,
                         help='처리할 PDF 페이지 번호 (0부터 시작, 기본값: 0)')
     parser.add_argument('--output', type=str, default='./value_compare/output',

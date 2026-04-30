@@ -344,7 +344,7 @@ class MagicModel:
                     html = layout_det.get('html', None)
                     if latex:
                         span['latex'] = latex
-                    elif html:
+                    elif html and "data-fallback='image'" not in html:
                         span['html'] = html
                         if layout_det.get('latex_boxes'):
                             span['latex_boxes'] = layout_det.get('latex_boxes')

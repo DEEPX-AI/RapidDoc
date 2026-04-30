@@ -8,7 +8,7 @@
 # 옵션:
 #   --unit-only          L1+L2 단위/Mock 테스트만 실행 (모델 불필요, 기본 동작)
 #   --integration        L3 통합 테스트까지 포함 (모델 + PDF + DX 환경 필요)
-#   --pdf <PATH>         통합 테스트에 사용할 PDF 경로 (기본: demo/pdfs 첫 번째 파일)
+#   --pdf <PATH>         통합 테스트에 사용할 PDF 경로 (기본: test_files 첫 번째 파일)
 #   --venv <PATH>        사용할 virtualenv 경로 (기본: ./venv)
 #   --loop <N>           N회 반복 실행 (aging 테스트, 기본: 1)
 #   --no-color           컬러 출력 비활성화
@@ -23,7 +23,7 @@
 #   bash tests/run_tests.sh --integration
 #
 #   # PDF 지정 + 풀 통합
-#   bash tests/run_tests.sh --integration --pdf demo/pdfs/physics0409110_origin.pdf
+#   bash tests/run_tests.sh --integration --pdf test_files/BVRC_Meeting_Minutes_2024-04_origin.pdf
 #
 #   # aging 테스트 — 통합 포함 10회 반복
 #   bash tests/run_tests.sh --integration --loop 10
@@ -179,12 +179,12 @@ if [[ "${RUN_INTEGRATION}" -eq 1 ]]; then
         fi
         ok "PDF (지정): ${PDF_PATH}"
     else
-        # demo/pdfs/ 에서 첫 번째 파일 자동 선택
-        PDF_PATH="$(ls "${PROJECT_ROOT}/demo/pdfs/"*.pdf 2>/dev/null | sort | head -1 || true)"
+        # test_files/ 에서 첫 번째 파일 자동 선택
+        PDF_PATH="$(ls "${PROJECT_ROOT}/test_files/"*.pdf 2>/dev/null | sort | head -1 || true)"
         if [[ -z "${PDF_PATH}" ]]; then
-            error "demo/pdfs/ 에 PDF 파일이 없습니다."
+            error "test_files/ 에 PDF 파일이 없습니다."
             error "  --pdf <PATH> 옵션으로 직접 지정하거나"
-            error "  demo/pdfs/ 에 PDF 파일을 추가하세요."
+            error "  test_files/ 에 PDF 파일을 추가하세요."
             exit 1
         fi
         ok "PDF (자동): ${PDF_PATH}"

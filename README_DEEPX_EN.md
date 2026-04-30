@@ -43,7 +43,7 @@ pip install -e .
 
 | Option | Description |
 |:---|:---|
-| `PATH` | PDF files or directories to process. Defaults to `demo/pdfs/` if omitted. |
+| `PATH` | PDF files or directories to process. Defaults to `test_files/` if omitted. |
 | `--output-dir DIR` | Output directory. Defaults to `demo/output-offline-{mode}/`. |
 
 ---
@@ -61,22 +61,31 @@ After the run, a `performance_summary.md` file is automatically saved in the out
 
 **Example output (`performance_summary.md`):**
 
-```
-FinegrainedStreamingPipeline PERFORMANCE SUMMARY
-Pipeline Step       Avg Latency     Throughput
-----------------------------------------------------------
- Layout               364.38 ms        2.7 FPS
- Formula              488.82 ms        2.0 FPS
- PDF-det                1.46 ms      683.2 FPS
- OCR-det               91.03 ms       11.0 FPS
- Table                479.04 ms        2.1 FPS
- OCR-rec               27.72 ms       36.1 FPS
-----------------------------------------------------------
- Total Stages         231.31 s
-----------------------------------------------------------
- Total Pages                  66
- Total Time              128.2 s
- Overall                 0.5 pages/s
+```markdown
+# FinegrainedStreamingPipeline Performance Summary
+
+- **Total Files**: 10
+- **Total Pages**: 66
+- **Total Wall Time**: 128.20 s
+- **Overall Throughput**: 0.5 pages/s
+
+## Overall Pipeline Performance
+
+| Pipeline Step | Count | Avg Latency | Throughput | Time (s) | Ratio |
+|:---|---:|---:|---:|---:|---:|
+| Layout | 66 | 364.38 ms | 2.7 FPS | 24.05 | 10.4% |
+| Formula | 66 | 488.82 ms | 2.0 FPS | 32.26 | 13.9% |
+| PDF-det | 998 | 1.46 ms | 683.2 FPS | 1.46 | 0.6% |
+| OCR-det | 998 | 91.03 ms | 11.0 FPS | 90.85 | 39.3% |
+| Table | 52 | 479.04 ms | 2.1 FPS | 24.91 | 10.8% |
+| OCR-rec | 2086 | 27.72 ms | 36.1 FPS | 57.83 | 25.0% |
+
+## Per-Document Elapsed Time
+
+| Document | Pages | Total Time (s) | Avg/Page (s) | Inferences |
+|:---|---:|---:|---:|---:|
+| example1.pdf | 12 | 23.45 | 1.95 | 789 |
+| example2.pdf | 54 | 104.75 | 1.94 | 3411 |
 ```
 
 The per-PDF breakdown (with actual filenames) is written to `performance_summary.md` in the output directory.

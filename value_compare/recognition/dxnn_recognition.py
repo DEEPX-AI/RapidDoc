@@ -9,7 +9,7 @@ OCR Recognition Model Inference Script
 사용법:
     python value_compare/recognition/onnx_recognition.py \
         --model_path onnx_models/ch_PP-OCRv5_rec_server_infer.onnx \
-        --image_path demo/pdfs/sample_text_crop.png \
+        --image_path test_files/BVRC_Meeting_Minutes_2024-04_origin.pdf \
         --output_dir value_compare/recognition/output
 """
 

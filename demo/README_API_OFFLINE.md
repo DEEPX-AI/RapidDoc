@@ -79,7 +79,7 @@ python demo/test_api_offline.py
 
 ```bash
 curl -X POST "http://localhost:8888/file_parse" \
-  -F "files=@demo/pdfs/example.pdf" \
+  -F "files=@test_files/BVRC_Meeting_Minutes_2024-04_origin.pdf" \
   -F "output_dir=./output-api" \
   -F "formula_enable=true" \
   -F "table_enable=true" \
@@ -97,7 +97,7 @@ import requests
 
 url = "http://localhost:8888/file_parse"
 
-with open("demo/pdfs/example.pdf", "rb") as f:
+with open("test_files/BVRC_Meeting_Minutes_2024-04_origin.pdf", "rb") as f:
     files = {"files": ("example.pdf", f, "application/pdf")}
     
     data = {

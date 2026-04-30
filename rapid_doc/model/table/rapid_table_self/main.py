@@ -10,8 +10,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 from .wired_table_rec.main import WiredTableInput, WiredTableRecognition
 
-# from .table_matcher.table_match_pipeline import TableMatchPipeline
-from .model_processor.main import ModelProcessor
 from .table_matcher import TableMatch
 from .utils import (
     LoadImage,
@@ -32,8 +30,8 @@ class RapidTable:
         if cfg is None:
             cfg = RapidTableInput()
 
-        if not cfg.model_dir_or_path and cfg.model_type != ModelType.UNET:
-            cfg.model_dir_or_path = ModelProcessor.get_model_path(cfg.model_type)
+        if not cfg.model_dir_or_path:
+            pass  # UNET uses model path from engine config
 
         self.cfg = cfg
         self.table_structure = self._init_table_structer()
@@ -57,10 +55,6 @@ class RapidTable:
         return rapidocr_.RapidOCR(params=params)
 
     def _init_table_structer(self):
-        if self.cfg.model_type == ModelType.UNITABLE:
-            from .table_structure.unitable import UniTableStructure
-            return UniTableStructure(asdict(self.cfg))
-
         if self.cfg.model_type == ModelType.UNET:
             wired_input = WiredTableInput(
                 model_path=self.cfg.model_dir_or_path, 
@@ -70,9 +64,7 @@ class RapidTable:
             )
             return WiredTableRecognition(wired_input)
 
-        from .table_structure.pp_structure import PPTableStructurer
-
-        return PPTableStructurer(asdict(self.cfg))
+        raise ValueError(f"Unsupported table model_type: {self.cfg.model_type}. Only UNET is supported.")
 
     def __call__(
         self,
@@ -83,36 +75,13 @@ class RapidTable:
         s = time.perf_counter()
 
         img = self.load_img(img_content)
-        if self.cfg.model_type == ModelType.UNET:
-            ocr_results = list(
-                zip(ocr_results[0], ocr_results[1], ocr_results[2])
-            )
-            table_results = self.table_structure(img, ocr_result=ocr_results)
-            return RapidTableOutput(img, table_results.pred_html, table_results.cell_bboxes,
-                                    table_results.logic_points.tolist() if table_results.logic_points is not None else None,
-                                    table_results.elapse)
-
-        dt_boxes, rec_res = self.get_ocr_results(img, ocr_results)
-        pred_structures, cell_bboxes, logic_points = self.get_table_rec_results(img)
-        if cell_results is not None:
-            cell_results, _ = cell_results
-            cell_results1, cells_flags = self.sort_table_cells_boxes(cell_results)
-            cell_bboxes = self.convert_to_four_point_coordinates(cell_results1)
-        pred_html = self.get_table_matcher(
-            pred_structures, cell_bboxes, dt_boxes, rec_res
+        ocr_results = list(
+            zip(ocr_results[0], ocr_results[1], ocr_results[2])
         )
-        # if cell_results is None:
-        #     pred_html = self.get_table_matcher(
-        #         pred_structures, cell_bboxes, dt_boxes, rec_res
-        #     )
-        # else:
-        #     pred_html, cell_bboxes = self.table_matcher_pipeline(
-        #         pred_structures, cell_bboxes, dt_boxes, rec_res, cell_results
-        #     )
-        #     cell_bboxes = self.convert_to_four_point_coordinates(cell_bboxes)
-
-        elapse = time.perf_counter() - s
-        return RapidTableOutput(img, pred_html, cell_bboxes, logic_points, elapse)
+        table_results = self.table_structure(img, ocr_result=ocr_results)
+        return RapidTableOutput(img, table_results.pred_html, table_results.cell_bboxes,
+                                table_results.logic_points.tolist() if table_results.logic_points is not None else None,
+                                table_results.elapse)
 
     def convert_to_four_point_coordinates(self, boxes: List[List[float]]) -> np.ndarray:
         """
@@ -217,7 +186,7 @@ def parse_args(arg_list: Optional[List[str]] = None):
         "-m",
         "--model_type",
         type=str,
-        default=ModelType.SLANETPLUS.value,
+        default=ModelType.UNET.value,
         choices=[v.value for v in ModelType],
         help="Supported table rec models",
     )

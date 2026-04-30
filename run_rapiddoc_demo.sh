@@ -3,7 +3,7 @@
 # This script automatically:
 # 1. Activates virtual environment
 # 2. Sets up environment variables
-# 3. Opens file manager to demo/pdfs/ folder
+# 3. Opens file manager to test_files/ folder
 # 4. Launches Gradio demo
 # 5. Opens Chrome browser to http://0.0.0.0:7860
 
@@ -92,9 +92,9 @@ else
     echo -e "${YELLOW}  Continuing anyway...${NC}"
 fi
 
-# Step 3: Open file manager to demo/pdfs/ folder
-echo -e "${YELLOW}[3/6] Opening demo/pdfs/ folder...${NC}"
-PDF_DIR="$SCRIPT_DIR/demo/pdfs"
+# Step 3: Open file manager to test_files/ folder
+echo -e "${YELLOW}[3/6] Opening test_files/ folder...${NC}"
+PDF_DIR="$SCRIPT_DIR/test_files"
 if [ -d "$PDF_DIR" ]; then
     # Try different file managers (xdg-open, nautilus, dolphin, thunar, etc.)
     if command -v xdg-open &> /dev/null; then
@@ -113,7 +113,7 @@ if [ -d "$PDF_DIR" ]; then
         echo -e "${YELLOW}⚠ File manager not found, skipping...${NC}"
     fi
 else
-    echo -e "${YELLOW}⚠ demo/pdfs/ folder not found${NC}"
+    echo -e "${YELLOW}⚠ test_files/ folder not found${NC}"
 fi
 
 # Step 4: Wait a moment for browser to be ready

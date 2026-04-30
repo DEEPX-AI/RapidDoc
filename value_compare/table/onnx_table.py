@@ -2,7 +2,7 @@
 UNET 테이블 모델의 inference 결과를 확인하는 스크립트
 
 사용법:
-    python value_compare/table/onnx_table.py --image ./demo/pdfs/table_image.jpg --model_path ./onnx_models/unet.onnx --save_output --visualize
+    python value_compare/table/onnx_table.py --image ./test_files/BVRC_Meeting_Minutes_2024-04_origin.pdf --model_path ./onnx_models/unet.onnx --save_output --visualize
 """
 import argparse
 import json

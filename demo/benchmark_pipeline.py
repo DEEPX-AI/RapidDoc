@@ -9,7 +9,7 @@ Metrics collected:
 
 Usage:
     source ./deepx_scripts/set_env.sh 1 2 1 3 2 4
-    python demo/benchmark_pipeline.py --pdf demo/pdfs/example.pdf
+    python demo/benchmark_pipeline.py --pdf test_files/BVRC_Meeting_Minutes_2024-04_origin.pdf
     python demo/benchmark_pipeline.py --pdf a.pdf b.pdf --iterations 3 --output ./bench_out
     python demo/benchmark_pipeline.py --pdf doc.pdf --no-async --layout-engine onnxruntime
 """

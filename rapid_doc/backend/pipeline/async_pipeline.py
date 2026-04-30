@@ -122,7 +122,7 @@ class TrueAsyncPipeline:
         # 세부 옵션
         self.checkbox_enable = self.checkbox_config.get("checkbox_enable", False)
         self.formula_rec_enable = self.formula_config.get("formula_rec_enable", True)
-        self.formula_level = self.formula_config.get("formula_level", 0)
+        self.formula_level = self.formula_config.get("formula_level", 2)
         self.table_force_ocr = self.table_config.get("force_ocr", False)
         self.skip_text_in_image = self.table_config.get("skip_text_in_image", True)
         self.use_img2table = self.table_config.get("use_img2table", False)
@@ -250,7 +250,18 @@ class TrueAsyncPipeline:
 
             ctx.ocr_candidates = list(ocr_candidates)
             ctx.checkbox_res = checkbox_res
-            ctx.formula_regions = list(formula_regions)  # mfdetrec_res (latex 채워질 예정)
+            # formula_level=2: 행간 수식은 LaTeX 추론 대상에서 제외
+            if self.formula_level == 2:
+                formula_regions_for_latex = [
+                    fr for fr in formula_regions
+                    if fr.get("category_id") not in (
+                        CategoryId.InterlineEquation_Layout,
+                        CategoryId.InterlineEquation_YOLO,
+                    )
+                ]
+            else:
+                formula_regions_for_latex = list(formula_regions)
+            ctx.formula_regions = formula_regions_for_latex
 
             # 테이블 후보: crop 이미지 포함
             ctx.table_candidates = []
@@ -265,7 +276,7 @@ class TrueAsyncPipeline:
 
             # 수식 crop 이미지
             ctx.formula_crops = []
-            for fr in formula_regions:
+            for fr in ctx.formula_regions:
                 latex_img, _ = crop_img(fr, ctx.np_img)
                 ctx.formula_crops.append(latex_img)
 
@@ -643,7 +654,14 @@ class TrueAsyncPipeline:
     @staticmethod
     def _apply_table_html(ti: dict, html_code: Optional[str]) -> None:
         """Table 모델 결과 HTML을 검증 후 table_res에 저장한다."""
-        if html_code and _TABLE_OPEN_TAG in html_code and _TABLE_CLOSE_TAG in html_code:
+        if not html_code:
+            logger.warning("Table recognition: HTML 테이블 태그 미발견")
+            return
+        # Image fallback marker — store as-is for downstream to handle
+        if "data-fallback='image'" in html_code:
+            ti['table_res']['html'] = html_code
+            return
+        if _TABLE_OPEN_TAG in html_code and _TABLE_CLOSE_TAG in html_code:
             s = html_code.find(_TABLE_OPEN_TAG)
             e = html_code.rfind(_TABLE_CLOSE_TAG) + len(_TABLE_CLOSE_TAG)
             ti['table_res']['html'] = html_code[s:e]
@@ -777,7 +795,17 @@ class TrueAsyncPipeline:
                 })
         ctx.ocr_candidates = list(ocr_candidates)
         ctx.checkbox_res = checkbox_res
-        ctx.formula_regions = list(formula_regions)
+        # formula_level=2: 행간 수식은 LaTeX 추론 대상에서 제외
+        if self.formula_level == 2:
+            ctx.formula_regions = [
+                fr for fr in formula_regions
+                if fr.get("category_id") not in (
+                    CategoryId.InterlineEquation_Layout,
+                    CategoryId.InterlineEquation_YOLO,
+                )
+            ]
+        else:
+            ctx.formula_regions = list(formula_regions)
         ctx.table_candidates = []
         for tr in table_candidates:
             table_img, useful_list = crop_img(tr, ctx.np_img)
@@ -788,7 +816,7 @@ class TrueAsyncPipeline:
                 'ocr_enable': ctx.ocr_enable,
             })
         ctx.formula_crops = []
-        for fr in formula_regions:
+        for fr in ctx.formula_regions:
             latex_img, _ = crop_img(fr, ctx.np_img)
             ctx.formula_crops.append(latex_img)
 

@@ -9,7 +9,7 @@ OCR Detection Model Output Visualization Script
 사용법:
     python value_compare/detect/onnx_detect.py \
         --model_path onnx_models/ch_PP-OCRv5_server_det.onnx \
-        --image_path demo/pdfs/sample.png \
+        --image_path test_files/BVRC_Meeting_Minutes_2024-04_origin.pdf \
         --output_dir value_compare/detect/output
 """
 

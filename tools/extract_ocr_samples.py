@@ -376,20 +376,20 @@ Examples:
   # 기본 사용 (모든 텍스트 관련 카테고리)
   python extract_ocr_samples.py \\
       --json_path demo/output-offline/demo1/auto/demo1_model.json \\
-      --pdf_path demo/pdfs/demo1.pdf \\
+      --pdf_path test_files/BVRC_Meeting_Minutes_2024-04_origin.pdf \\
       --output_dir output/ocr_samples
 
   # 특정 카테고리만 추출 (OcrText만)
   python extract_ocr_samples.py \\
       --json_path demo/output-offline/demo1/auto/demo1_model.json \\
-      --pdf_path demo/pdfs/demo1.pdf \\
+      --pdf_path test_files/BVRC_Meeting_Minutes_2024-04_origin.pdf \\
       --output_dir output/ocr_samples_only \\
       --categories 15
 
   # 최대 100개 샘플만 추출
   python extract_ocr_samples.py \\
       --json_path demo/output-offline/demo1/auto/demo1_model.json \\
-      --pdf_path demo/pdfs/demo1.pdf \\
+      --pdf_path test_files/BVRC_Meeting_Minutes_2024-04_origin.pdf \\
       --output_dir output/ocr_samples_100 \\
       --max_samples 100
         """

@@ -7,12 +7,12 @@ Sync(BatchAnalyze) vs Async(TrueAsyncPipeline)를 동일 입력으로 비교하�
 스테이지별 소요 시간·처리량을 측정한다.
 
 사용법:
-    # 기본 실행 (demo/pdfs/ 사용, dxengine)
+    # 기본 실행 (test_files/ 사용, dxengine)
     python dxnn_benchmark/benchmark_pipeline_async.py
 
     # 옵션 지정
     python dxnn_benchmark/benchmark_pipeline_async.py \
-        --pdf demo/pdfs/example.pdf \
+        --pdf test_files/BVRC_Meeting_Minutes_2024-04_origin.pdf \
         --engine dxengine \
         --warmup 1 \
         --runs 3 \
@@ -442,13 +442,13 @@ def save_report(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _find_pdf(pdf_arg: Optional[str], project_root) -> str:
-    """PDF 경로를 결정한다. 미지정 시 demo/pdfs/ 의 첫 번째 파일을 반환한다."""
+    """PDF 경로를 결정한다. 미지정 시 test_files/ 의 첫 번째 파일을 반환한다."""
     if pdf_arg:
         return pdf_arg
     pdf_dir = project_root / "demo" / "pdfs"
     pdfs = sorted(pdf_dir.glob("*.pdf"))
     if not pdfs:
-        logger.error(f"demo/pdfs/ 에 PDF 파일이 없습니다: {pdf_dir}")
+        logger.error(f"test_files/ 에 PDF 파일이 없습니다: {pdf_dir}")
         sys.exit(1)
     pdf_path = str(pdfs[0])
     logger.info(f"자동 선택된 PDF: {pdf_path}")
@@ -556,7 +556,7 @@ def _report(args, sync_data, async_data, n_pages):
 def main():
     parser = argparse.ArgumentParser(description="RapidDoc 파이프라인 Sync vs Async 벤치마크")
     parser.add_argument("--pdf", type=str, default=None,
-                        help="입력 PDF 경로. 미지정 시 demo/pdfs/ 의 첫 번째 PDF 사용")
+                        help="입력 PDF 경로. 미지정 시 test_files/ 의 첫 번째 PDF 사용")
     parser.add_argument("--engine", type=str, choices=["dxengine", "onnxruntime"],
                         default="dxengine", help="추론 엔진 (기본값: dxengine)")
     parser.add_argument("--start-page", type=int, default=0, help="시작 페이지 ID")

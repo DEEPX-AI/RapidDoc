@@ -103,5 +103,5 @@ if __name__ == "__main__":
         # 첫 번째 PDF 파일로 테스트
         test_file_parse(str(pdf_files[0]))
     else:
-        print("No PDF files found in demo/pdfs directory")
+        print("No PDF files found in test_files directory")
         print("Please add a PDF file to test the API")

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 curl -X POST "http://localhost:8888/file_parse" \
-  -F "files=@demo/pdfs/small_ocr.pdf" \
+  -F "files=@test_files/BVRC_Meeting_Minutes_2024-04_origin.pdf" \
   -F "output_dir=./output-api" \
   -F "formula_enable=true" \
   -F "table_enable=true" \
