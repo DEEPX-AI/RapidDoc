@@ -13,7 +13,7 @@ source ./deepx_scripts/set_env.sh 1 2 1 3 2 4
 #   CUSTOM_INTER_OP_THREADS_COUNT=1
 #   CUSTOM_INTRA_OP_THREADS_COUNT=2
 #   DXRT_DYNAMIC_CPU_THREAD=1
-#   DXRT_TASK_MAX_LOAD=3          (NPU I/O buffer depth; max limited by NPU memory)
+#   DXRT_TASK_MAX_LOAD=3          (NPU I/O buffer depth; presence-only check, any value accepted)
 #   NFH_INPUT_WORKER_THREADS=2
 #   NFH_OUTPUT_WORKER_THREADS=4
 
@@ -139,13 +139,49 @@ After each run, a `performance_summary_YYYYMMDD_HHMMSS.md` file is saved in the 
 
 ## Other Demos
 
-### Offline API Server
+All demo apps share the same `--finegrained` (default) and hybrid auto-detection optimizations as `demo_offline.py`.
+
+### Offline API Server (FastAPI)
 ```shell
-python demo/app_offline.py --deepx-default
-# Test: python demo/test_api_offline.py
+# Start server (default: finegrained pipeline, deepx engines, hybrid auto-detected)
+python demo/app_offline.py
+
+# Customize pipeline mode and hybrid behavior
+python demo/app_offline.py --pipeline-mode finegrained --hybrid
+python demo/app_offline.py --pipeline-mode sync --no-hybrid
+python demo/app_offline.py --no-deepx-default      # Use ONNX engines by default
+
+# Smoke test
+curl http://localhost:8888/health | jq          # Shows pipeline mode + hybrid status
+python demo/test_api_offline.py
 ```
+
+CLI options: `--host`, `--port`, `--pipeline-mode {finegrained,async,sync}`, `--hybrid`/`--no-hybrid`, `--deepx-default`/`--no-deepx-default`.
 
 ### Gradio Web UI
 ```shell
-python demo/gradio_app.py  # port 7860
+python demo/gradio_app.py  # http://localhost:7860
 ```
+Uses `finegrained` pipeline by default; hybrid mode auto-enabled when ≥2 NPUs detected.
+
+### Standalone Benchmark
+```shell
+# Default: finegrained pipeline
+python demo/benchmark_pipeline.py --pdf test_files/sample.pdf -n 3
+
+# Compare modes
+python demo/benchmark_pipeline.py --pdf doc.pdf --legacy-async    # AsyncPipeline
+python demo/benchmark_pipeline.py --pdf doc.pdf --no-async        # Sync
+
+# Multi-NPU
+python demo/benchmark_pipeline.py --pdf doc.pdf --hybrid --json-report bench.json
+```
+
+### Minimal Python API Example
+See `demo/demo.py` for a minimal `do_parse()` usage example using ONNX models from `onnx_models/`.
+
+---
+
+## Environment Variable Validation
+
+All apps relax `DXRT_TASK_MAX_LOAD` to **presence-only** (any value accepted; recommended `3` for M1PCIe). Other variables in `set_env.sh 1 2 1 3 2 4` must match exactly.

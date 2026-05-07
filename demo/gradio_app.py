@@ -27,37 +27,46 @@ from loguru import logger
 # =============================================================================
 def check_environment_setup():
     """
-    Check if deepx_scripts/set_env.sh 1 2 1 3 2 4 has been executed
-    Exit with warning if required environment variables are not set
+    Check if deepx_scripts/set_env.sh has been executed.
+    DXRT_TASK_MAX_LOAD is checked for presence only (any value accepted).
+    Exit with warning if required environment variables are missing.
     """
     required_env_vars = {
         "CUSTOM_INTER_OP_THREADS_COUNT": "1",
         "CUSTOM_INTRA_OP_THREADS_COUNT": "2",
         "DXRT_DYNAMIC_CPU_THREAD": "1",
-        "DXRT_TASK_MAX_LOAD": "3",
+        "DXRT_TASK_MAX_LOAD": None,  # presence-only check
         "NFH_INPUT_WORKER_THREADS": "2",
         "NFH_OUTPUT_WORKER_THREADS": "4",
     }
     
     missing_vars = []
+    incorrect_vars = []
     for var_name, expected_value in required_env_vars.items():
-        if var_name not in os.environ:
+        actual = os.environ.get(var_name)
+        if actual is None:
             missing_vars.append(var_name)
+        elif expected_value is not None and actual != expected_value:
+            incorrect_vars.append(f"{var_name}={actual} (expected: {expected_value})")
     
-    if missing_vars:
+    if missing_vars or incorrect_vars:
         logger.error("=" * 80)
         logger.error("❌ Environment setup is not complete!")
         logger.error("")
         logger.error("Please run the following command first:")
         logger.error("  $ source ./deepx_scripts/set_env.sh 1 2 1 3 2 4")
         logger.error("")
-        logger.error(f"Missing environment variables: {', '.join(missing_vars)}")
+        if missing_vars:
+            logger.error(f"Missing environment variables: {', '.join(missing_vars)}")
+        if incorrect_vars:
+            logger.error(f"Variables with unexpected values: {', '.join(incorrect_vars)}")
         logger.error("=" * 80)
         sys.exit(1)
     
     logger.info("✅ Environment setup verified")
     for var_name, expected_value in required_env_vars.items():
-        logger.info(f"  {var_name}={os.environ.get(var_name)}")
+        label = "any" if expected_value is None else expected_value
+        logger.info(f"  {var_name}={os.environ.get(var_name)} (expected: {label})")
 
 check_environment_setup()
 # =============================================================================
@@ -99,6 +108,21 @@ dxnn_models_dir = project_root / "dxnn_models"
 # Default output directory
 DEFAULT_OUTPUT_DIR = project_root / "demo" / "output-gradio"
 DEFAULT_OUTPUT_DIR.mkdir(exist_ok=True)
+
+# Pipeline / hybrid defaults (aligned with demo_offline.py optimizations)
+#   - 'finegrained' : 7-stage per-page streaming pipeline (fastest, default)
+#   - True          : AsyncPipelineRapidDoc (legacy async)
+#   - False         : Synchronous batch processing
+DEFAULT_PIPELINE_MODE = 'finegrained'
+
+def _autodetect_hybrid_default() -> bool:
+    try:
+        from rapid_doc.utils.device_utils import get_dxnn_devices
+        return len(get_dxnn_devices()) >= 2
+    except Exception:
+        return False
+
+DEFAULT_HYBRID = _autodetect_hybrid_default()
 
 
 def extract_performance_summary(perf_logs: str) -> Tuple[List[List[str]], str]:
@@ -382,12 +406,12 @@ def get_model_config(
     table_config = {"model_type": TableModelType.UNET}
     if table_engine == "dxengine":
         table_config["engine_type"] = "dxengine"
-        table_config["model_dir_or_path"] = str(dxnn_models_dir / "unet.dxnn")
+        table_config["unet.model_dir_or_path"] = str(dxnn_models_dir / "unet.dxnn")
     elif table_engine == "torch":
         table_config["engine_type"] = "torch"
     else:
         table_config["engine_type"] = "onnxruntime"
-        table_config["model_dir_or_path"] = str(onnx_models_dir / "unet.onnx")
+        table_config["unet.model_dir_or_path"] = str(onnx_models_dir / "unet.onnx")
 
     checkbox_config = {"checkbox_enable": False}
     image_config = {
@@ -519,6 +543,7 @@ def parse_document(
                 table_config=table_config,
                 checkbox_config=checkbox_config,
                 use_async_pipeline=use_async_pipeline,
+                hybrid=DEFAULT_HYBRID,
             )
             
             # Remove log handler and extract log content
@@ -744,7 +769,7 @@ def create_ui():
                     )
                 formula_enable = gr.State(value=True)
                 table_enable = gr.State(value=True)
-                use_async_pipeline = gr.State(value=True)
+                use_async_pipeline = gr.State(value=DEFAULT_PIPELINE_MODE)
                 
                 parse_btn = gr.Button("🚀 Start Parsing", variant="primary", size="lg")
 

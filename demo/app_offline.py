@@ -36,12 +36,14 @@ from pydantic import BaseModel, Field
 # 환경 변수 체크 (deepx_scripts/set_env.sh 1 2 1 3 2 4 설정 필요)
 # =============================================================================
 def check_environment():
-    """Check that deepx_scripts/set_env.sh 1 2 1 3 2 4 was sourced and required env vars are set."""
+    """Check that deepx_scripts/set_env.sh 1 2 1 3 2 4 was sourced and required env vars are set.
+    DXRT_TASK_MAX_LOAD is checked for presence only (any value accepted).
+    """
     required_env_vars = {
         'CUSTOM_INTER_OP_THREADS_COUNT': '1',
         'CUSTOM_INTRA_OP_THREADS_COUNT': '2',
         'DXRT_DYNAMIC_CPU_THREAD': '1',
-        'DXRT_TASK_MAX_LOAD': '3',
+        'DXRT_TASK_MAX_LOAD': None,  # presence-only (any value accepted)
         'NFH_INPUT_WORKER_THREADS': '2',
         'NFH_OUTPUT_WORKER_THREADS': '4'
     }
@@ -53,7 +55,7 @@ def check_environment():
         actual_value = os.environ.get(var_name)
         if actual_value is None:
             missing_vars.append(var_name)
-        elif actual_value != expected_value:
+        elif expected_value is not None and actual_value != expected_value:
             incorrect_vars.append(f"{var_name}={actual_value} (expected: {expected_value})")
     
     if missing_vars or incorrect_vars:
@@ -73,10 +75,12 @@ def check_environment():
         sys.exit(1)
     else:
         logger.info("=" * 80)
-        logger.info("✓ Environment variables verified (1 2 1 3 2 4)")
+        logger.info("✓ Environment variables verified")
         logger.info("-" * 80)
         for var_name, expected_value in required_env_vars.items():
-            logger.info(f"  {var_name}={expected_value}")
+            actual = os.environ.get(var_name)
+            label = "any" if expected_value is None else expected_value
+            logger.info(f"  {var_name}={actual} (expected: {label})")
         logger.info("=" * 80)
     
     return True
@@ -127,7 +131,23 @@ dxnn_models_dir = project_root / "dxnn_models"
 # =============================================================================
 DEFAULT_FORMULA_ENABLE = True
 DEFAULT_TABLE_ENABLE = True
-DEFAULT_DEEPX = False  # default deepx mode (overridable via CLI)
+DEFAULT_DEEPX = True  # default: use DX Engine (NPU) since this server targets DEEPX env
+
+# Pipeline performance defaults (aligned with demo_offline.py)
+#   - 'finegrained': 7-stage per-page streaming pipeline (fastest, default)
+#   - True         : AsyncPipelineRapidDoc (legacy async)
+#   - False        : Synchronous batch processing
+DEFAULT_PIPELINE_MODE = 'finegrained'
+
+# Hybrid device partitioning (auto-enabled when 2+ NPU devices are available)
+def _autodetect_hybrid_default() -> bool:
+    try:
+        from rapid_doc.utils.device_utils import get_dxnn_devices
+        return len(get_dxnn_devices()) >= 2
+    except Exception:
+        return False
+
+DEFAULT_HYBRID = _autodetect_hybrid_default()
 
 # deepx=False (ONNX)
 DEFAULT_LAYOUT_ENGINE = "onnxruntime"
@@ -171,6 +191,10 @@ async def health_check():
         "mode": "closed_environment",
         "environment_check": env_check_passed,
         "environment_variables": env_vars,
+        "pipeline": {
+            "mode": DEFAULT_PIPELINE_MODE,
+            "hybrid": DEFAULT_HYBRID,
+        },
         "default_engines": {
             "deepx": DEFAULT_DEEPX,
             "layout": DEFAULT_LAYOUT_ENGINE,
@@ -296,12 +320,12 @@ def get_default_table_config(engine: str = DEFAULT_TABLE_ENGINE) -> dict:
     
     if engine.lower() == "dxengine":
         config["engine_type"] = "dxengine"
-        config["model_dir_or_path"] = str(dxnn_models_dir / "unet.dxnn")
+        config["unet.model_dir_or_path"] = str(dxnn_models_dir / "unet.dxnn")
     elif engine.lower() == "torch":
         config["engine_type"] = "torch"
     else:  # onnxruntime
         config["engine_type"] = "onnxruntime"
-        config["model_dir_or_path"] = str(onnx_models_dir / "unet.onnx")
+        config["unet.model_dir_or_path"] = str(onnx_models_dir / "unet.onnx")
     
     return config
 
@@ -561,6 +585,8 @@ async def file_parse(
                     table_config=table_config,
                     checkbox_config=checkbox_config,
                     image_config=image_config,
+                    use_async_pipeline=DEFAULT_PIPELINE_MODE,
+                    hybrid=DEFAULT_HYBRID,
                 )
                 
                 logger.info(f"Parse completed for {file.filename}")
@@ -801,6 +827,8 @@ async def images_annotate(request_body: AnnotateImageRequests):
                         table_config=table_config,
                         checkbox_config=checkbox_config,
                         image_config=image_config,
+                        use_async_pipeline=DEFAULT_PIPELINE_MODE,
+                        hybrid=DEFAULT_HYBRID,
                     )
                     
                     # 결과 수집
@@ -915,15 +943,31 @@ if __name__ == "__main__":
         "--deepx-default",
         dest="deepx_default",
         action="store_true",
-        help="Use DeepX engines by default when requests omit the deepx flag",
+        help="Use DeepX engines by default when requests omit the deepx flag (default)",
     )
     parser.add_argument(
         "--no-deepx-default",
         dest="deepx_default",
         action="store_false",
-        help="Use ONNXRuntime engines by default when requests omit the deepx flag (default)",
+        help="Use ONNXRuntime engines by default when requests omit the deepx flag",
     )
-    parser.set_defaults(deepx_default=False)
+    parser.set_defaults(deepx_default=DEFAULT_DEEPX)
+    parser.add_argument(
+        "--pipeline-mode",
+        choices=["finegrained", "async", "sync"],
+        default=DEFAULT_PIPELINE_MODE,
+        help="Pipeline execution mode (default: finegrained = 7-stage streaming, fastest)",
+    )
+    hybrid_group = parser.add_mutually_exclusive_group()
+    hybrid_group.add_argument(
+        "--hybrid", dest="hybrid", action="store_true",
+        help="Force hybrid device partitioning (requires 2+ NPU devices)",
+    )
+    hybrid_group.add_argument(
+        "--no-hybrid", dest="hybrid", action="store_false",
+        help="Disable hybrid device partitioning",
+    )
+    parser.set_defaults(hybrid=DEFAULT_HYBRID)
     args = parser.parse_args()
 
     if args.no_gzip:
@@ -931,14 +975,20 @@ if __name__ == "__main__":
         app.user_middleware = [m for m in app.user_middleware if m.cls is not GZipMiddleware]
         app.middleware_stack = app.build_middleware_stack()
 
-    # Apply deepx default choice from CLI
+    # Apply CLI-driven defaults globally
     DEFAULT_DEEPX = args.deepx_default
+    DEFAULT_PIPELINE_MODE = {
+        "finegrained": "finegrained", "async": True, "sync": False
+    }[args.pipeline_mode]
+    DEFAULT_HYBRID = args.hybrid
 
     logger.info("=" * 80)
     logger.info("RapidDoc Offline API Server Starting...")
     logger.info(f"Version: {__version__}")
     logger.info("Mode: Closed Environment (Network Blocked)")
     logger.info("-" * 80)
+    logger.info(f"Pipeline Mode: {args.pipeline_mode}")
+    logger.info(f"Hybrid Device Partitioning: {'enabled' if DEFAULT_HYBRID else 'disabled'}")
     logger.info("Default Engine Settings (deepx=False):")
     logger.info(f"  Layout Engine:  {DEFAULT_LAYOUT_ENGINE}")
     logger.info(f"  OCR Engine:     {DEFAULT_OCR_ENGINE}")

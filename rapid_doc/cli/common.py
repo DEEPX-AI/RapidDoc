@@ -184,6 +184,7 @@ def _process_pipeline(
         use_async_pipeline=False,
         async_input_interval=0.0,
         async_verbose=False,
+        hybrid=False,
 ):
     """处理pipeline后端逻辑"""
     from rapid_doc.backend.pipeline.model_json_to_middle_json import result_to_middle_json as pipeline_result_to_middle_json
@@ -198,6 +199,7 @@ def _process_pipeline(
             use_async_pipeline=use_async_pipeline,
             async_input_interval=async_input_interval,
             async_verbose=async_verbose,
+            hybrid=hybrid,
         )
     )
 
@@ -292,6 +294,10 @@ async def aio_do_parse(
         f_make_md_mode=MakeMode.MM_MD,
         start_page_id=0,
         end_page_id=None,
+        use_async_pipeline=False,
+        async_input_interval=0.0,
+        async_verbose=False,
+        hybrid=False,
         **kwargs,
 ):
     # 预处理PDF字节数据
@@ -305,6 +311,10 @@ async def aio_do_parse(
             layout_config, ocr_config, formula_config, table_config, checkbox_config, image_config,
             f_draw_layout_bbox, f_draw_span_bbox, f_dump_md, f_dump_middle_json,
             f_dump_model_output, f_dump_orig_pdf, f_dump_content_list, f_make_md_mode,
+            use_async_pipeline=use_async_pipeline,
+            async_input_interval=async_input_interval,
+            async_verbose=async_verbose,
+            hybrid=hybrid,
         )
 
 

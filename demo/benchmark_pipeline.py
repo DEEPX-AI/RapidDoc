@@ -356,6 +356,7 @@ def run_benchmark(
     table_enable: bool = True,
     formula_rec_enable: bool = True,
     use_async: bool = True,
+    hybrid: bool = False,
     npu_monitor_interval: int = 1,
     json_report: Optional[str] = None,
 ) -> Dict:
@@ -478,6 +479,7 @@ def run_benchmark(
             table_config=table_config,
             checkbox_config=checkbox_config,
             use_async_pipeline=use_async,
+            hybrid=hybrid,
         )
 
         wall_elapsed = time.perf_counter() - wall_start
@@ -566,6 +568,7 @@ def run_benchmark(
             'formula_rec_enable': formula_rec_enable,
             'table_enable':    table_enable,
             'use_async':       use_async,
+            'hybrid':          hybrid,
         },
         'summary': {
             'total_pages':         total_pages,
@@ -616,10 +619,17 @@ def print_report(report: Dict) -> None:
     print(f"║  PDFs      : {', '.join(Path(p).name for p in pdfs):<63}║")
     print(f"║  Engines   : layout={cfg['layout_engine']:<10} ocr={cfg['ocr_engine']:<10} "
           f"table={cfg['table_engine']:<10}  ║")
+    _async = cfg['use_async']
+    if _async == "finegrained":
+        async_label = "fg"
+    elif _async:
+        async_label = "yes"
+    else:
+        async_label = "no"
     print(f"║  Formula   : {'enabled' if cfg['formula_enable'] else 'disabled':<5}  "
           f"Table: {'enabled' if cfg['table_enable'] else 'disabled':<5}  "
-          f"Async: {'yes' if cfg['use_async'] else 'no':<3}  "
-          f"Iterations: {cfg['iterations']:<5}                   ║")
+          f"Pipeline: {async_label:<3}  Hybrid: {'yes' if cfg.get('hybrid') else 'no':<3}  "
+          f"Iter: {cfg['iterations']:<3}     ║")
     print("╠" + "═" * 78 + "╣")
 
     # Throughput
@@ -715,7 +725,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-table",   dest="table_enable",   action="store_false",
                    help="Disable table processing")
     p.add_argument("--no-async",   dest="use_async",      action="store_false",
-                   help="Use synchronous pipeline instead of async")
+                   help="Use synchronous pipeline (default: finegrained streaming)")
+    p.add_argument("--legacy-async", dest="pipeline_mode", action="store_const", const="async",
+                   help="Use legacy AsyncPipelineRapidDoc instead of FinegrainedStreamingPipeline")
+    p.add_argument("--finegrained", dest="pipeline_mode", action="store_const", const="finegrained",
+                   help="Use FinegrainedStreamingPipeline (default)")
+    p.set_defaults(pipeline_mode="finegrained")
+    p.add_argument("--hybrid", action="store_true", default=False,
+                   help="Enable hybrid device partitioning (requires 2+ NPU devices)")
     p.add_argument("--npu-interval", type=int, default=1, metavar="SEC",
                    help="dxrt-cli --monitor sampling interval in seconds")
     p.add_argument("--json-report", metavar="FILE",
@@ -724,20 +741,23 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _check_env() -> None:
-    """Warn if mandatory environment variables are missing."""
+    """Warn if mandatory environment variables are missing.
+    DXRT_TASK_MAX_LOAD is checked for presence only (any value accepted)."""
     required = {
         'CUSTOM_INTER_OP_THREADS_COUNT': '1',
         'CUSTOM_INTRA_OP_THREADS_COUNT': '2',
         'DXRT_DYNAMIC_CPU_THREAD':       '1',
-        'DXRT_TASK_MAX_LOAD':            '3',
+        'DXRT_TASK_MAX_LOAD':            None,  # presence-only
         'NFH_INPUT_WORKER_THREADS':      '2',
         'NFH_OUTPUT_WORKER_THREADS':     '4',
     }
-    issues = [
-        f"{k}={os.environ.get(k)!r} (expected {v!r})"
-        for k, v in required.items()
-        if os.environ.get(k) != v
-    ]
+    issues = []
+    for k, v in required.items():
+        actual = os.environ.get(k)
+        if actual is None:
+            issues.append(f"{k} is unset (expected: {v!r})")
+        elif v is not None and actual != v:
+            issues.append(f"{k}={actual!r} (expected {v!r})")
     if issues:
         logger.warning("Environment variables not set correctly:")
         for msg in issues:
@@ -751,6 +771,14 @@ def main() -> None:
 
     _check_env()
 
+    # Resolve pipeline mode: --no-async overrides everything to sync; otherwise use --pipeline_mode
+    if not args.use_async:
+        use_async_value = False
+    elif args.pipeline_mode == "finegrained":
+        use_async_value = "finegrained"
+    else:  # 'async'
+        use_async_value = True
+
     report = run_benchmark(
         pdf_paths=args.pdf,
         output_dir=args.output,
@@ -762,7 +790,8 @@ def main() -> None:
         formula_enable=args.formula_enable,
         table_enable=args.table_enable,
         formula_rec_enable=args.formula_rec_enable,
-        use_async=args.use_async,
+        use_async=use_async_value,
+        hybrid=args.hybrid,
         npu_monitor_interval=args.npu_interval,
         json_report=args.json_report,
     )
