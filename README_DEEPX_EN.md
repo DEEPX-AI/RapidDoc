@@ -1,22 +1,28 @@
 # RapidDoc Usage Examples (DeepX)
 
-These examples assume your virtual environment and models/env variables are already set (e.g., `source venv/bin/activate` and, if needed, run `source ./deepx_scripts/set_env.sh ...`).
+These examples assume your virtual environment and models/env variables are already set.
 
-Prerequisites
+## Prerequisites
+
 ```shell
 # 1) Activate your venv
-source venv/bin/activate
+source venv311/bin/activate
 
-# 2) Download sample models into this repo root
-./setup.sh --force-remove-models
+# 2) Set required environment variables for DX-RT
+source ./deepx_scripts/set_env.sh 1 2 1 3 2 4
+#   CUSTOM_INTER_OP_THREADS_COUNT=1
+#   CUSTOM_INTRA_OP_THREADS_COUNT=2
+#   DXRT_DYNAMIC_CPU_THREAD=1
+#   DXRT_TASK_MAX_LOAD=3          (NPU I/O buffer depth; max limited by NPU memory)
+#   NFH_INPUT_WORKER_THREADS=2
+#   NFH_OUTPUT_WORKER_THREADS=4
 
-# 3) Build dx-rt (replace with your path)
-cd /path/to/dx-rt
-./build.sh --clean
-cd -
+# 3) (Optional) Specify NPU devices — auto-detected if not set
+export DXNN_DEVICES=0          # Single NPU
+# export DXNN_DEVICES=0,1,2,3  # Multi-NPU
 
 # 4) Install RapidDoc dependencies and editable package
-pip install -r requirements.gradio.txt
+pip install -r requirements.deepx.txt
 pip install -e .
 ```
 
@@ -28,16 +34,25 @@ pip install -e .
 
 | Option | Description |
 |:---|:---|
-| `--finegrained` | **(Default)** 7-stage per-page streaming pipeline. Stages (Layout → Plan → Formula → PDF-det → OCR-det → Table → OCR-rec) run concurrently with inter-stage queues. Fastest mode — ~17% faster than `--use-async`. |
+| `--finegrained` | **(Default)** 7-stage per-page streaming pipeline. Stages (Layout → Plan → Formula → PDF-det → OCR-det → Table → OCR-rec) run concurrently with inter-stage queues. |
 | `--use-async` | Batch async pipeline (TrueAsyncPipeline). Processes all pages through each stage before moving to the next. |
 | `--no-async` | Sequential sync pipeline. Processes pages one at a time through all stages. Slowest but simplest. |
+
+### Parse Method
+
+| Option | Description |
+|:---|:---|
+| `--parse-method auto` | **(Default)** Classify PDF → digital PDFs use text layer, scanned PDFs use OCR. Per-page decision: only pages without text are OCR'd. |
+| `--parse-method txt` | Use PDF text layer only. No OCR at all. Fastest (~5s for 12-page digital PDF). Pages without embedded text return empty results. |
+| `--parse-method ocr` | Force OCR on all pages. Ignores PDF text layer. Use for scanned PDFs or accuracy evaluation (~200s for 12 pages). |
 
 ### Inference Options
 
 | Option | Description |
 |:---|:---|
-| `--no-formula` | Skip formula recognition entirely. Formula regions detected by layout are kept as **cropped images** instead of LaTeX text. Removes the largest single-stage bottleneck (~99s). |
-| `--force-ocr` | Ignore PDF text metadata and use image→OCR for all text extraction. Useful for scanned PDFs or model evaluation. Increases OCR workload but parallel pipeline absorbs most overhead. |
+| `--no-formula` | Skip formula recognition. Formula regions kept as cropped images instead of LaTeX. |
+| `--force-ocr` | (Deprecated) Alias for `--parse-method ocr`. |
+| `--hybrid` | Multi-NPU mode: assigns each model to a dedicated NPU device for physical parallelism. Requires 2+ NPUs. |
 
 ### Other Options
 
@@ -48,58 +63,89 @@ pip install -e .
 
 ---
 
-## 1) Offline Demo (Default: Finegrained Pipeline)
-- Command: `python demo/demo_offline.py`
-- Description: CLI demo that processes local PDF/image files with the **finegrained streaming pipeline** (default). Outputs (markdown/images) are saved under `demo/output-offline-finegrained/`.
-- With options: `python demo/demo_offline.py test_files --no-formula --force-ocr`
+## Quick Start Examples
 
-## 1-1) Offline Demo (Async Pipeline)
-- Command: `python demo/demo_offline.py --use-async`
-- Description: CLI demo using the batch async pipeline. Outputs are saved under `demo/output-offline-async/`.
+```shell
+# Basic: process all PDFs in test_files/ with finegrained pipeline
+python demo/demo_offline.py test_files --finegrained
 
-After the run, a `performance_summary.md` file is automatically saved in the output directory with per-PDF stage latency and throughput, along with overall aggregated stats.
+# Fast text extraction (digital PDF, no OCR)
+python demo/demo_offline.py test_files/document.pdf --parse-method txt
 
-**Example output (`performance_summary.md`):**
+# Force OCR mode (scanned PDF)
+python demo/demo_offline.py test_files/scanned.pdf --parse-method ocr
 
-```markdown
-# FinegrainedStreamingPipeline Performance Summary
+# Multi-NPU with hybrid device allocation
+export DXNN_DEVICES=0,1,2,3
+python demo/demo_offline.py test_files --finegrained --hybrid
 
-- **Total Files**: 10
-- **Total Pages**: 66
-- **Total Wall Time**: 128.20 s
-- **Overall Throughput**: 0.5 pages/s
-
-## Overall Pipeline Performance
-
-| Pipeline Step | Count | Avg Latency | Throughput | Time (s) | Ratio |
-|:---|---:|---:|---:|---:|---:|
-| Layout | 66 | 364.38 ms | 2.7 FPS | 24.05 | 10.4% |
-| Formula | 66 | 488.82 ms | 2.0 FPS | 32.26 | 13.9% |
-| PDF-det | 998 | 1.46 ms | 683.2 FPS | 1.46 | 0.6% |
-| OCR-det | 998 | 91.03 ms | 11.0 FPS | 90.85 | 39.3% |
-| Table | 52 | 479.04 ms | 2.1 FPS | 24.91 | 10.8% |
-| OCR-rec | 2086 | 27.72 ms | 36.1 FPS | 57.83 | 25.0% |
-
-## Per-Document Elapsed Time
-
-| Document | Pages | Total Time (s) | Avg/Page (s) | Inferences |
-|:---|---:|---:|---:|---:|
-| example1.pdf | 12 | 23.45 | 1.95 | 789 |
-| example2.pdf | 54 | 104.75 | 1.94 | 3411 |
+# With NPU utilization monitoring
+python run_with_npu_monitor.py python demo/demo_offline.py test_files --finegrained
 ```
 
-The per-PDF breakdown (with actual filenames) is written to `performance_summary.md` in the output directory.
+---
 
-## 2) Offline API Server (DeepX Default)
-- Start server: `python demo/app_offline.py --deepx-default`
-  - Uses DeepX as the default engine (preferred over ONNXRuntime).
-- Test: in another terminal run `python demo/test_api_offline.py`
-  - Sends sample requests and checks the server responses.
+## NPU Monitoring
 
-## 3) Gradio Web UI
-- Command: `python demo/gradio_app.py`
-- Description: Launches the Gradio-based web UI (default port 7860) for upload/parse/preview.
+Use `run_with_npu_monitor.py` to measure real-time NPU utilization during pipeline execution:
 
-## Notes
-- If your environment needs dx-rt inference engine thread tuning, run `./deepx_scripts/set_env.sh` with the appropriate arguments before starting the demos/servers.
-- Logs and output paths follow each script's internal settings; adjust inside the scripts if you need different locations.
+```shell
+python run_with_npu_monitor.py [--interval 1.0] <command...>
+```
+
+Example output:
+```
+┌─────────────────────────────────────────────────────┐
+│              NPU 사용률 요약                         │
+├─────────────────────────────────────────────────────┤
+│  샘플 수:  210  (1.0s 간격)                        │
+│  전체 평균:   27.7%    최대: 100.0%             │
+│  Core:0  avg= 39.6%  max=100.0%  min=  0.0%   │
+│  Core:1  avg= 23.4%  max=100.0%  min=  0.0%   │
+│  Core:2  avg= 20.2%  max=100.0%  min=  0.0%   │
+└─────────────────────────────────────────────────────┘
+```
+
+The monitor auto-detects the number of NPU devices and cores via `dxtop`.
+
+---
+
+## Performance Summary
+
+After each run, a `performance_summary_YYYYMMDD_HHMMSS.md` file is saved in the output directory with:
+- Per-stage latency and throughput (Layout, OCR-det, OCR-rec, Table, etc.)
+- Per-document elapsed time breakdown
+
+---
+
+## Environment Variables
+
+| Variable | Default | Description |
+|:---|:---|:---|
+| `DXNN_DEVICES` | Auto-detect | Comma-separated NPU device IDs (e.g., `0,1,2,3`). Auto-detected via DX-RT API or `/dev/dxrt*` scan if not set. |
+| `DXRT_TASK_MAX_LOAD` | 3 | NPU I/O buffer depth. Higher values queue more requests but require more NPU memory. Max usable depends on how many models are loaded. |
+| `CUSTOM_INTER_OP_THREADS_COUNT` | 1 | Inter-op thread count for DX-RT inference. |
+| `CUSTOM_INTRA_OP_THREADS_COUNT` | 2 | Intra-op thread count for DX-RT inference. |
+
+---
+
+## Architecture Notes
+
+- **OCR Preprocessing**: Detection uses pad-to-square with gray(114,114,114) before resize (preserves aspect ratio). Recognition uses gray(114) padding for width normalization. Both match the C++ reference implementation.
+- **Multi-model OCR**: Detection uses 4 aspect-ratio models (64×640, 160×640, 320×640, 640×640). Recognition uses 6 width-ratio models (ratio 3/5/10/15/25/35).
+- **Hybrid mode**: `DeviceAllocator` distributes models across NPUs — Layout/Table/OCR-det/OCR-rec each get dedicated hardware for true pipeline parallelism.
+
+---
+
+## Other Demos
+
+### Offline API Server
+```shell
+python demo/app_offline.py --deepx-default
+# Test: python demo/test_api_offline.py
+```
+
+### Gradio Web UI
+```shell
+python demo/gradio_app.py  # port 7860
+```
