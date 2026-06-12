@@ -34,12 +34,12 @@ TOTAL_DEVICES_RE = re.compile(r'Total Devices:\s*(\d+)')
 
 
 def parse_dxtop_output(raw: str) -> dict:
-    """dxtop 출력에서 Device별 Core Util%와 NPU Memory를 파싱.
+    """Parse per-Device Core Util% and NPU Memory from dxtop output.
 
     Returns:
         {
             'devices': {0: {0: util%, 1: util%, 2: util%}, 1: {...}, ...},
-            'cores': {(dev, core): util%, ...},  # flat view (backward compat용 전체 평균 계산)
+            'cores': {(dev, core): util%, ...},  # flat view (for backward-compat overall average)
             'memory_pct': float,
             'num_devices': int,
         }
@@ -47,21 +47,21 @@ def parse_dxtop_output(raw: str) -> dict:
     clean = ANSI_ESCAPE.sub('', raw)
     result = {'devices': {}, 'cores': {}, 'memory_pct': 0.0, 'num_devices': 0}
 
-    # Total Devices 감지
+    # Detect Total Devices
     td_match = TOTAL_DEVICES_RE.search(clean)
     if td_match:
         result['num_devices'] = int(td_match.group(1))
 
-    # dxtop은 주기적으로 전체 화면을 갱신 — 마지막 완전한 블록 사용
-    # "Total Devices:" 기준으로 마지막 완전한 출력 블록을 찾음
+    # dxtop redraws the whole screen periodically — use the last complete block.
+    # Locate the last complete output block by the "Total Devices:" marker.
     blocks = clean.split('Total Devices:')
     if len(blocks) >= 2:
-        # 마지막 완전한 블록 직전의 데이터 영역 사용
+        # Use the data region just before the last complete block
         last_block = blocks[-2] if len(blocks) > 2 else blocks[-2]
     else:
         last_block = clean
 
-    # Device별 Core 파싱: Device 헤더로 분할
+    # Parse per-Device cores: split on the Device header
     device_sections = DEVICE_RE.split(last_block)
     # device_sections: [before_first_device, dev_id_str, section, dev_id_str, section, ...]
     current_dev = 0
@@ -77,18 +77,18 @@ def parse_dxtop_output(raw: str) -> dict:
         if cores:
             result['devices'][dev_id] = cores
 
-    # fallback: Device 헤더가 없는 경우 (단일 디바이스 이전 포맷)
+    # fallback: no Device header (older single-device format)
     if not result['devices']:
         all_matches = list(CORE_UTIL_RE.finditer(last_block))
         if all_matches:
-            # 코어 수를 동적으로 감지 (중복 core_id 발견 시 마지막 세트만 사용)
+            # Detect the core count dynamically (on a duplicate core_id, keep only the last set)
             seen_ids = []
             for m in all_matches:
                 cid = int(m.group(1))
                 if seen_ids and cid <= seen_ids[-1]:
-                    seen_ids = []  # 새 디바이스 시작
+                    seen_ids = []  # new device starts
                 seen_ids.append(cid)
-            # 코어 수 = 한 세트의 크기
+            # core count = size of one set
             cores_per_device = len(seen_ids) if seen_ids else 3
             latest = all_matches[-cores_per_device:]
             cores = {}
@@ -102,7 +102,7 @@ def parse_dxtop_output(raw: str) -> dict:
     if not result['num_devices']:
         result['num_devices'] = len(result['devices']) or 1
 
-    # Memory (마지막 매치 사용)
+    # Memory (use the last match)
     mem_matches = list(NPU_MEM_RE.finditer(clean))
     if mem_matches:
         mem_match = mem_matches[-1]
@@ -119,7 +119,7 @@ def parse_dxtop_output(raw: str) -> dict:
 
 
 def sample_dxtop() -> dict:
-    """dxtop을 1회 샘플링하여 결과를 반환. (단독 호출용 fallback)"""
+    """Sample dxtop once and return the result. (standalone fallback)"""
     import tempfile
     tmp = tempfile.mktemp(suffix='.txt')
     try:
@@ -140,13 +140,13 @@ def sample_dxtop() -> dict:
 
 
 def make_bar(pct: float, width: int = 20) -> str:
-    """퍼센트를 ASCII 바로 표현."""
+    """Render a percentage as an ASCII bar."""
     filled = int(pct / 100 * width)
     return '█' * filled + '░' * (width - filled)
 
 
 def format_core_line(devices: dict) -> str:
-    """Device별 Core 사용률을 한 줄로 포맷. devices = {dev_id: {core_id: util}}"""
+    """Format per-Device core utilization on one line. devices = {dev_id: {core_id: util}}"""
     if not devices:
         return "  (no data)"
     parts = []
@@ -160,7 +160,7 @@ def format_core_line(devices: dict) -> str:
 
 
 class NpuMonitor:
-    """백그라운드에서 dxtop을 장기 실행하고 주기적으로 파일을 재파싱."""
+    """Run dxtop long-lived in the background and periodically re-parse its output file."""
 
     def __init__(self, interval: float = 1.0):
         self.interval = interval
@@ -171,16 +171,16 @@ class NpuMonitor:
         self._dxtop_file = '/tmp/dxtop_monitor_live.txt'
 
     def start(self):
-        # 기존 파일 삭제
+        # Remove any stale file
         if os.path.exists(self._dxtop_file):
             os.unlink(self._dxtop_file)
-        # dxtop을 장기 실행 (script로 pty 감싸서 ANSI 출력 캡처)
+        # Run dxtop long-lived (wrap in `script` for a pty to capture ANSI output)
         self._dxtop_proc = subprocess.Popen(
             ['script', '-qc', 'dxtop', self._dxtop_file],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             preexec_fn=os.setsid
         )
-        # dxtop이 첫 출력을 생성할 때까지 대기
+        # Wait until dxtop produces its first output
         time.sleep(3)
         self._thread = threading.Thread(target=self._run, daemon=True, name="npu-monitor")
         self._thread.start()
@@ -207,7 +207,7 @@ class NpuMonitor:
         while not self._stop.is_set():
             data = self._read_latest()
             if data['devices']:
-                # 전체 코어 평균 계산
+                # Compute the overall core average
                 all_utils = [u for cores in data['devices'].values() for u in cores.values()]
                 avg = sum(all_utils) / len(all_utils) if all_utils else 0
                 sample = {
@@ -221,7 +221,7 @@ class NpuMonitor:
                 }
                 self.samples.append(sample)
                 elapsed = sample['elapsed']
-                # 멀티 디바이스: 디바이스별 평균 표시
+                # Multi-device: show the per-device average
                 if data['num_devices'] > 1:
                     dev_parts = []
                     for dev_id in sorted(data['devices'].keys()):
@@ -235,7 +235,7 @@ class NpuMonitor:
             self._stop.wait(self.interval)
 
     def _read_latest(self) -> dict:
-        """dxtop 출력 파일을 읽어 파싱."""
+        """Read and parse the dxtop output file."""
         try:
             if not os.path.exists(self._dxtop_file):
                 return {'devices': {}, 'cores': {}, 'memory_pct': 0.0, 'num_devices': 0}
@@ -246,14 +246,14 @@ class NpuMonitor:
             return {'devices': {}, 'cores': {}, 'memory_pct': 0.0, 'num_devices': 0}
 
     def summary(self) -> str:
-        """수집된 샘플을 기반으로 요약 통계를 생성."""
+        """Build summary statistics from the collected samples."""
         if not self.samples:
-            return "  (NPU 샘플 없음)"
+            return "  (no NPU samples)"
 
         n = len(self.samples)
         num_devices = self.samples[-1].get('num_devices', 1)
 
-        # 전체 통계
+        # Overall statistics
         all_avgs = []
         device_core_utils = defaultdict(lambda: defaultdict(list))  # {dev_id: {core_id: [utils]}}
         device_avgs = defaultdict(list)  # {dev_id: [per-sample avg]}
@@ -278,15 +278,15 @@ class NpuMonitor:
         lines = [
             "",
             "┌─────────────────────────────────────────────────────────────────┐",
-            "│                    NPU 사용률 요약                               │",
+            "│                    NPU Utilization Summary                        │",
             "├─────────────────────────────────────────────────────────────────┤",
-            f"│  디바이스: {num_devices}대    샘플 수: {n:>4}  ({self.interval}s 간격)              │",
-            f"│  전체 평균: {total_avg:5.1f}%    최대: {total_max:5.1f}%                       │",
-            f"│  0% 구간:  {zero_count:>4} 샘플 ({zero_pct:.1f}%)                           │",
+            f"│  Devices: {num_devices}    Samples: {n:>4}  ({self.interval}s interval)                 │",
+            f"│  Overall avg: {total_avg:5.1f}%    max: {total_max:5.1f}%                          │",
+            f"│  Idle (0%):  {zero_count:>4} samples ({zero_pct:.1f}%)                          │",
             "├─────────────────────────────────────────────────────────────────┤",
         ]
 
-        # Device별 통계
+        # Per-Device statistics
         for dev_id in sorted(device_core_utils.keys()):
             dev_vals = device_avgs.get(dev_id, [])
             d_avg = sum(dev_vals) / len(dev_vals) if dev_vals else 0
@@ -305,10 +305,10 @@ class NpuMonitor:
 
         lines.append("├─────────────────────────────────────────────────────────────────┤")
 
-        # 시간별 추이 (10구간)
+        # Timeline trend (10 buckets)
         if n >= 10:
             chunk_size = n // 10
-            lines.append("│  시간별 추이 (10구간):                                           │")
+            lines.append("│  Timeline trend (10 buckets):                                    │")
             for i in range(10):
                 start = i * chunk_size
                 end = start + chunk_size if i < 9 else n
@@ -319,21 +319,21 @@ class NpuMonitor:
                 pct_e = (i + 1) * 10
                 lines.append(f"│  {pct_s:>3}%-{pct_e:>3}%  {bar} {chunk_avg:5.1f}%       │")
         else:
-            lines.append("│  시간별 추이: (샘플 부족)                                        │")
+            lines.append("│  Timeline trend: (not enough samples)                            │")
 
         lines.append("└─────────────────────────────────────────────────────────────────┘")
         return "\n".join(lines)
 
 
 def main():
-    # '--' 이전은 모니터 옵션, 이후는 실행 명령어
+    # Before '--' are monitor options; after it is the command to run
     argv = sys.argv[1:]
     if '--' in argv:
         sep = argv.index('--')
         monitor_args = argv[:sep]
         cmd = argv[sep + 1:]
     else:
-        # --interval만 모니터 옵션으로 분리
+        # Split out only --interval as a monitor option
         monitor_args = []
         cmd = []
         i = 0
@@ -347,11 +347,11 @@ def main():
             i += 1
 
     parser = argparse.ArgumentParser(
-        description="NPU 사용률을 모니터링하면서 명령어 실행",
+        description="Run a command while monitoring NPU utilization",
         usage="%(prog)s [--interval SEC] [--] command..."
     )
     parser.add_argument('--interval', type=float, default=1.0,
-                        help='샘플링 간격 (초, 기본: 1.0)')
+                        help='Sampling interval in seconds (default: 1.0)')
     args = parser.parse_args(monitor_args)
 
     if not cmd:
@@ -378,9 +378,9 @@ def main():
         monitor.stop()
         elapsed = time.perf_counter() - t_start
 
-    print()  # 실시간 출력 다음 줄
+    print()  # newline after the live output
     print(f"\n{'='*60}")
-    print(f"  실행 완료: {elapsed:.1f}s (exit code: {returncode})")
+    print(f"  Done: {elapsed:.1f}s (exit code: {returncode})")
     print(f"{'='*60}")
     print(monitor.summary())
 

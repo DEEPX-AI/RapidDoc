@@ -8,7 +8,14 @@ These examples assume your virtual environment and models/env variables are alre
 # 1) Activate your venv
 source venv311/bin/activate
 
-# 2) Set required environment variables for DX-RT
+# 2) Install RapidDoc dependencies and editable package
+pip install -r requirements.deepx.txt
+pip install -e .
+
+# 3) Download the NPU models (ONNX + DXNN) — see "Model & Environment Setup" below
+./setup.sh
+
+# 4) Set required environment variables for DX-RT
 source ./deepx_scripts/set_env.sh 1 2 1 3 2 4
 #   CUSTOM_INTER_OP_THREADS_COUNT=1
 #   CUSTOM_INTRA_OP_THREADS_COUNT=2
@@ -17,14 +24,37 @@ source ./deepx_scripts/set_env.sh 1 2 1 3 2 4
 #   NFH_INPUT_WORKER_THREADS=2
 #   NFH_OUTPUT_WORKER_THREADS=4
 
-# 3) (Optional) Specify NPU devices — auto-detected if not set
+# 5) (Optional) Specify NPU devices — auto-detected if not set
 export DXNN_DEVICES=0          # Single NPU
 # export DXNN_DEVICES=0,1,2,3  # Multi-NPU
-
-# 4) Install RapidDoc dependencies and editable package
-pip install -r requirements.deepx.txt
-pip install -e .
 ```
+
+---
+
+## Model & Environment Setup (`./setup.sh`)
+
+RapidDoc does **not** require you to compile any model yourself. The bundled
+`./setup.sh` provisions every model the pipeline needs — run it once after installing
+the dependencies:
+
+```shell
+./setup.sh                          # host mode (auto-detected)
+./setup.sh --force-remove-models    # re-download, replacing existing models
+./setup.sh --docker_volume_path=/path/to/volume   # container mode (required inside Docker)
+```
+
+What it does (`setup_assets()` → `setup_sample_models.sh`):
+
+1. Checks for the model payload directories `dxnn_models/` and `onnx_models/`.
+2. If either is missing, runs `./setup_sample_models.sh`, which **downloads the prebuilt
+   ONNX + DXNN models** into those directories. If both already exist, the download is
+   skipped (use `--force-remove-models` to force a refresh).
+3. In container mode (`--docker_volume_path`), models are symlinked into the Docker volume.
+
+> **Do NOT hand-compile the models with `dxcom`.** The DXNN binaries are already built
+> for the DX-M1 NPU and are fetched by `./setup.sh` — this is the single, foreground
+> provisioning step. After it completes, source `deepx_scripts/set_env.sh` (step 4 above)
+> and you are ready to run `demo/demo_offline.py`.
 
 ---
 
@@ -96,13 +126,14 @@ python run_with_npu_monitor.py [--interval 1.0] <command...>
 Example output:
 ```
 ┌─────────────────────────────────────────────────────┐
-│              NPU 사용률 요약                         │
+│              NPU Utilization Summary                  │
 ├─────────────────────────────────────────────────────┤
-│  샘플 수:  210  (1.0s 간격)                        │
-│  전체 평균:   27.7%    최대: 100.0%             │
-│  Core:0  avg= 39.6%  max=100.0%  min=  0.0%   │
-│  Core:1  avg= 23.4%  max=100.0%  min=  0.0%   │
-│  Core:2  avg= 20.2%  max=100.0%  min=  0.0%   │
+│  Devices: 1    Samples:  210  (1.0s interval)         │
+│  Overall avg:  27.7%    max: 100.0%                   │
+│  Idle (0%):    18 samples (8.6%)                      │
+│   Core:0  avg= 39.6%  max=100.0%  min=  0.0%          │
+│   Core:1  avg= 23.4%  max=100.0%  min=  0.0%          │
+│   Core:2  avg= 20.2%  max=100.0%  min=  0.0%          │
 └─────────────────────────────────────────────────────┘
 ```
 
